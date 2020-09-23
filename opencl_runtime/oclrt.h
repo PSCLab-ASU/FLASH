@@ -11,7 +11,7 @@ class oclrt_runtime
 
     static std::shared_ptr<oclrt_runtime> get_runtime();
  
-    status register_kernels(  
+    //status register_kernels(  
 
     status execute( std::string, uint, std::vector<te_variable>, std::vector<te_variable> ); 
 
