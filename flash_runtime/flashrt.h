@@ -39,8 +39,7 @@ class flash_rt
 
     std::vector<device_state> _devices;
 
-    static  std::shared_ptr<flash_rt> _global_ptr; 
-    
+    static std::shared_ptr<flash_rt> _global_ptr; 
     
 };
 

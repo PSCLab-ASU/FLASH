@@ -1,15 +1,31 @@
 #include "opencl_runtime/oclrt.h"
+#include <iostream>
 #include <ranges>
+
+
+/* Registers the factory with flash factory*/
+bool ocl_runtime::_registered = FlashableRuntimeFactory::Register(
+                                ocl_runtime::get_factory_name(),
+                                ocl_runtime::get_runtime() );
 
 std::shared_ptr<ocl_runtime> ocl_runtime::_global_ptr;
 
-std::shared_ptr<ocl_runtime> ocl_runtime::get_runtime()
+
+FlashableRuntimeMeta<IFlashableRuntime> ocl_runtime::get_runtime()
+{
+  //automatic polymorphism to base classa
+  FlashableRuntimeMeta<IFlashableRuntime> out{ (std::shared_ptr<IFlashableRuntime> (*)()) get_singleton, 
+                                                get_factory_desc() };
+
+  return out;
+}
+
+
+std::shared_ptr<ocl_runtime> ocl_runtime::get_singleton()
 {
 
-  if( _global_ptr )
-    return _global_ptr;
-  else
-    return _global_ptr = std::shared_ptr<ocl_runtime>( new ocl_runtime() );
+  if( _global_ptr ) return _global_ptr;
+  else return _global_ptr = std::shared_ptr<ocl_runtime>( new ocl_runtime() );
 
 }
 
