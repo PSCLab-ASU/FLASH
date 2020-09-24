@@ -12,7 +12,8 @@
 #include <optional>
 #include <any>
 #include <common.h>
-
+#include <vector>
+#include <flash_runtime/flashrt.h>
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////API relies on Runtime implementation thread-safety, and singleton//////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -148,11 +149,27 @@ class RuntimeObj
         //constructor with upstream
         RuntimeObj(RuntimeImpl impl, _Upstream& upst, Ts&& ... ts)
         {
+          constexpr size_t N = sizeof...(ts);
           std::cout << "Calling RuntimeObj with Upstream..." << std::endl;
           _upstream = upst;
           _runtimeImpl = impl;
-
           
+          //register all functions
+          std::cout << std::boolalpha;
+          std::string keys[N]   = { ts.get_method()... };
+          kernel_t kernel_types[N] = { ts.get_kernel_type()... };
+
+          constexpr std::array<bool, N> is_same( {std::is_same_v<std::string, typename Ts::program_t>...} );
+          constexpr bool all_type = std::all_of( is_same.begin(), is_same.end(), [](bool b){ return b; } );
+  
+          if constexpr( all_type )
+          {
+            std::cout << "All types are strings" << std::endl;
+            std::optional<std::string> inputs[N] = { ts.get_kernel_details()... };
+            _runtimeImpl->register_kernels(N, kernel_types,  keys, inputs);
+          }
+          else std::cout << "Different types detected" << std::endl;
+
         }
 
         RuntimeImpl get_runtime(){ return _runtimeImpl; }
@@ -289,9 +306,12 @@ template<KernelDECL KD, kernel_t k_type=kernel_t::INT_SRC, typename ... Ts>
 struct KernelDefinition
 {
     using input_ts = std::tuple<Ts...>;
-    using program_t = kernel_t_decl<k_type>;
+    //using program_t = kernel_t_decl<k_type>;
+    using program_t = typename kernel_t_decl<k_type>::value_type;
     
-    constexpr std::string get_method(){ return std::string(KD.p); }
+    constexpr std::string get_method()        { return std::string(KD.p); }
+    constexpr kernel_t    get_kernel_type()   { return k_type; }
+    kernel_t_decl<k_type> get_kernel_details(){ return _input_program; }
 
     KernelDefinition ( kernel_t_decl<k_type> inp={} )
     : _input_program(inp){}

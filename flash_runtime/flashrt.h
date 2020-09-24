@@ -3,31 +3,28 @@
 #include <common.h>
 #include <vector>
 #include <map>
-#include <flash_interface.h>
+#include <memory>
 
-struct ocl_kernel_details_t
+
+
+struct kernel_details
 {
-
 
 };
 
-struct ocl_context_t
+struct device_state
 {
 
   kernel_details _kernel_details;
 };
 
 
-
-
-
-
-class ocl_runtime : public flash_interface
+class flash_rt
 {
 
   public:
 
-    static std::shared_ptr<ocl_runtime> get_runtime();
+    static std::shared_ptr<flash_rt> get_runtime( std::string );
  
     status register_kernels( size_t, kernel_t [], std::string [], std::optional<std::string> [] );
 
@@ -36,14 +33,15 @@ class ocl_runtime : public flash_interface
 
   private:
 
-    oclrt_runtime();
+    flash_rt();
 
     std::vector<kernel_details> _kernels;
 
     std::vector<device_state> _devices;
 
-    static  std::shared_ptr<ocl_runtime> _global_ptr; 
-
+    static  std::shared_ptr<flash_rt> _global_ptr; 
+    
+    
 };
 
 

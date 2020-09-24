@@ -3,7 +3,7 @@
 #include <memory>
 #include <array>
 #include <functional>
-
+#include <string_view>
 
 #pragma once 
 enum struct kernel_t { INT_SRC, EXT_SRC, INT_BIN, EXT_BIN }; 
