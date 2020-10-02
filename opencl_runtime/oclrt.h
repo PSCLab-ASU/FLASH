@@ -23,9 +23,9 @@ class ocl_runtime : public IFlashableRuntime
 
   public:
 
-    status register_kernels( size_t, kernel_t [], std::string [], std::optional<std::string> [] );
+    status register_kernels( size_t, kernel_t [], std::string [], std::optional<std::string> [] ) final;
 
-    status execute( std::string, uint, std::vector<te_variable>, std::vector<te_variable> ); 
+    status execute( std::string, uint, std::vector<te_variable>, std::vector<te_variable> ) final;  
 
     static FlashableRuntimeMeta<IFlashableRuntime> get_runtime();
 
@@ -33,7 +33,7 @@ class ocl_runtime : public IFlashableRuntime
 
     static std::string get_factory_name() { return "INTEL_FPGA"; }
 
-    static std::string get_factory_desc() { return "This runtime support opencl rutimes for Altera FPGA"; }
+    static std::string get_factory_desc() { return "This runtime support opencl runtimes for Altera FPGA"; }
 
 
   private:

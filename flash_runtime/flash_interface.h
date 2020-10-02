@@ -1,14 +1,20 @@
 #include <memory>
 #include <string>
 #include <map>
-
+#include <common.h>
 
 #pragma once
 
 class IFlashableRuntime
 {
-  
-  int i=0;
+  public:
+
+    virtual status register_kernels(size_t, kernel_t [], std::string[], 
+                                    std::optional<std::string> [] ) = 0;
+
+    virtual status execute(std::string kernel_name, uint num_of_inputs,
+                           std::vector<te_variable> kernel_args, 
+                           std::vector<te_variable> exec_parms) = 0;
 };
 
 
@@ -21,6 +27,8 @@ struct FlashableRuntimeMeta
 
   void set_creation( IGetMethod method ) { m_GetRuntime = method; }
   void set_description( std::string desc ) { m_Description = desc; }
+  std::string get_description () { return m_Description; }
+
   std::shared_ptr<T> operator()(){ return m_GetRuntime(); };
 
   IGetMethod  m_GetRuntime;

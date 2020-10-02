@@ -37,7 +37,7 @@ ocl_runtime::ocl_runtime()
 status ocl_runtime::execute(std::string kernel_name, uint num_of_inputs, 
                               std::vector<te_variable> kernel_args, std::vector<te_variable> exec_parms)
 {
-  std::cout << "Executing from RuntimeImpl..." << std::endl;
+  std::cout << "Executing from opencl_runtime..." << std::endl;
   return {};
 }
 
@@ -45,10 +45,7 @@ status ocl_runtime::register_kernels( size_t num_kernels, kernel_t kernel_types[
                                       std::string kernel_names[], std::optional<std::string> inputs[] ) 
 {
   
- for (int i : std::views::iota((size_t) 1, num_kernels))
- {
-
- }
-
- return {}; 
+  std::cout << "calling ocl_runtime::" << __func__<<  std::endl;
+ 
+  return {}; 
 }

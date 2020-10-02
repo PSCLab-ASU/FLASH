@@ -7,6 +7,7 @@ bool FlashableRuntimeFactory::Register( const std::string name, FlashableRuntime
 {
   if( auto it =runtimes.find( name ); it == runtimes.end() )
   {
+    std::cout << "Registering : " << name << std::endl;
     runtimes[name] = info;
     return true;
   }
@@ -15,11 +16,11 @@ bool FlashableRuntimeFactory::Register( const std::string name, FlashableRuntime
 } 
 
 auto FlashableRuntimeFactory::Create( const std::string& name ) -> 
-std::shared_ptr<RuntimeInterface>
+std::optional<FlashableRuntimeInfo>
 {
   if( auto it = runtimes.find( name ); it != runtimes.end() )
-    return it->second();
-  return nullptr;
+    return it->second;
+  return {};
 }
 
 

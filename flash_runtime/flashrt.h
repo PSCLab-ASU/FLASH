@@ -4,8 +4,8 @@
 #include <vector>
 #include <map>
 #include <memory>
-
-
+#include <flash_runtime/flash_interface.h>
+#include <flash_runtime/flashable_factory.h>
 
 struct kernel_details
 {
@@ -22,6 +22,8 @@ struct device_state
 class flash_rt
 {
 
+  using FlashableRuntimeInfo = FlashableRuntimeMeta<IFlashableRuntime>;
+
   public:
 
     static std::shared_ptr<flash_rt> get_runtime( std::string );
@@ -32,8 +34,12 @@ class flash_rt
 
 
   private:
+  
 
-    flash_rt();
+    flash_rt( std::string );
+
+    std::optional<FlashableRuntimeInfo>  _backend;
+    std::shared_ptr<IFlashableRuntime>   _runtime_ptr;
 
     std::vector<kernel_details> _kernels;
 
