@@ -92,18 +92,33 @@ template<typename RuntimeImpl, typename _Upstream = NullType, typename ... Ts>
 class RuntimeObj 
 {
   public :
-    using Upstream_t = _Upstream;
-    using Registry_t = std::tuple<Ts...>;
+    using Upstream_t    = _Upstream;
+    using Registry_t    = std::tuple<Ts...>;
+    using RuntimeImpl_t = RuntimeImpl;
 
     //constructor without upstream
     explicit  RuntimeObj(RuntimeImpl impl, Ts&& ... ts)
+    : _runtimeImpl(impl), _registry( ts...)
     {
       std::cout << "Calling RuntimeObj without Upstream..." << std::endl;
-      auto var    = std::make_tuple(ts...);
-      auto entry  = std::get<2>(var);
-      auto method = entry.get_method();
-      //std::cout << "method = " << method << std::endl;
-      _runtimeImpl = impl;
+    }
+
+    template<size_t I>
+    auto get_ctor_input()
+    {
+       return std::get<I>(_registry).get_kernel_details(); 
+    }
+
+    Registry_t get_kernel_definition_registry()
+    {
+      return _registry;
+    }
+
+    template<size_t I>
+    auto get_kernel_definition()
+    {
+      std::string name = std::get<I>(_registry).get_kernel_details().value();
+      return std::get<I>(_registry);
     }
 
     template< typename InpTL, typename ... Inputs, typename... Outputs, 
@@ -113,14 +128,20 @@ class RuntimeObj
         auto func2 = [&]<std::size_t... I >(std::index_sequence<I...> )
         {
             auto func3 = [&](auto... ins, auto... outs ){
-
-
+              //TBD need to do something
+              //HERE HERE HERE
             };
             func3.template operator()<std::tuple_element_t<I, typename InpTL::input_ts>...>(std::forward<Inputs>(ins)..., std::forward<Outputs>(outs)...);
         };
         func2(Indices{}); 
+ 
+       
+        //TBD differentiate
 
-        return SubmitObj(*this, std::integral_constant<size_t, N>{},  lookup.get_method(), snap_shot() );
+
+ 
+
+        return SubmitObj(*this, std::integral_constant<size_t, N>{},  lookup.get_kernel_details().value(), snap_shot() );
     }
  
     template<typename T>
@@ -148,11 +169,14 @@ class RuntimeObj
 
         //constructor with upstream
         RuntimeObj(RuntimeImpl impl, _Upstream& upst, Ts&& ... ts)
+        : _upstream(upst), _runtimeImpl(impl), _registry( ts...)
         {
           constexpr size_t N = sizeof...(ts);
           std::cout << "Calling RuntimeObj with Upstream..." << std::endl;
-          _upstream = upst;
-          _runtimeImpl = impl;
+          //_upstream = upst;
+          //_runtimeImpl = impl;
+          //save the kernel descriptions
+          //_registry = std::make_tuple(ts...);
           
           //register all functions
           std::cout << std::boolalpha;
@@ -166,6 +190,9 @@ class RuntimeObj
           {
             std::cout << "All types are strings" << std::endl;
             std::optional<std::string> inputs[N] = { ts.get_kernel_details()... };
+
+            //for(int i=0; i < N; i++) std::cout << "input = " << bool(inputs[i]) << std::endl;
+
             _runtimeImpl->register_kernels(N, kernel_types,  keys, inputs);
           }
           else std::cout << "Different types detected" << std::endl;
@@ -178,6 +205,7 @@ class RuntimeObj
         //std::optional<Upstream> _upstream;
         std::optional<_Upstream> _upstream;
         RuntimeImpl _runtimeImpl;
+        Registry_t _registry;
 
         typedef struct _snap_shot_data{
 
@@ -260,7 +288,7 @@ auto SubmitObj<Upstream, NumInputs, Ts...>::defer(Us... items)
   {
       auto func2 = [&]<std::size_t... I >(std::index_sequence<I...> ) 
       {
-        return RuntimeObj(_upstream->get_runtime(), *this, std::tuple_element_t<I, typename Upstream::Registry_t>{}...); 
+        return RuntimeObj(_upstream->get_runtime(), *this, _upstream->template get_kernel_definition<I>() ... );
       };
     
     return func2(Indices{}); 
@@ -314,7 +342,7 @@ struct KernelDefinition
     kernel_t_decl<k_type> get_kernel_details(){ return _input_program; }
 
     KernelDefinition ( kernel_t_decl<k_type> inp={} )
-    : _input_program(inp){}
+    : _input_program(inp){ }
 
     kernel_t_decl<k_type> _input_program;
 

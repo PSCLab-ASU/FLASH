@@ -5,16 +5,18 @@
 #include <map>
 #include <flash_runtime/flash_interface.h>
 #include <flash_runtime/flashable_factory.h>
+#include <opencl.h>
 
-struct ocl_kernel_details_t
-{
-
-
-};
 
 struct ocl_context_t
 {
-  ocl_kernel_details_t _kernel_details;
+   //total context
+   cl_context _ctx;
+   //some device breakdown
+   std::vector<cl_device_id> _dev_ids;
+   //  def:kernel_name   programs
+   std::map<std::string, 
+            std::optional<cl_program> > _programs;
 };
 
 
@@ -23,7 +25,7 @@ class ocl_runtime : public IFlashableRuntime
 
   public:
 
-    status register_kernels( size_t, kernel_t [], std::string [], std::optional<std::string> [] ) final;
+    status register_kernels( const std::vector<kernel_desc> & ) final;
 
     status execute( std::string, uint, std::vector<te_variable>, std::vector<te_variable> ) final;  
 
@@ -40,9 +42,18 @@ class ocl_runtime : public IFlashableRuntime
 
     ocl_runtime();
 
-    std::vector<ocl_kernel_details_t> _kernels;
+    std::optional<std::vector<cl_device_id> > _get_devices();
 
-    std::vector<ocl_context_t> _devices;
+    //convert a kernel desciption into reading the aocx file
+    std::vector<
+      std::pair<std::string, 
+                std::optional<std::string> > >
+    _read_kernel_files( const std::vector<kernel_desc>& );
+
+    void _append_programs( auto ); 
+
+    std::vector<ocl_context_t> _contexts;
+    std::vector<kernel_desc>   _kernels;
 
     static  std::shared_ptr<ocl_runtime> _global_ptr; 
 

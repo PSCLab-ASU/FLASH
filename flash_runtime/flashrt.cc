@@ -1,5 +1,7 @@
 #include <flash_runtime/flashrt.h>
 #include <ranges>
+#include <algorithm>
+
 
 std::shared_ptr<flash_rt> flash_rt::_global_ptr;
 
@@ -41,10 +43,22 @@ status flash_rt::register_kernels( size_t num_kernels, kernel_t kernel_types[],
                                         std::string kernel_names[], std::optional<std::string> inputs[] ) 
 {
   std::cout << "calling flash_rt::" << __func__ << std::endl;
-  //check if thier is a runtime exists
+  std::vector<kernel_desc> kernel_inputs;
+
+  auto pack_data = [&](int index)-> kernel_desc
+  {
+    return kernel_desc{kernel_types[index], kernel_names[index], inputs[index]};
+  };
+
+  //check if thier is a runtime existsa
+  auto kernels = std::views::iota( (size_t) 0, num_kernels ) | std::views::transform(pack_data);
+  
+  //pack the inputs into
+  std::ranges::for_each(kernels, [&](auto input){ kernel_inputs.push_back(input); } );
+  
   if( _runtime_ptr )
   {
-    _runtime_ptr->register_kernels(num_kernels, kernel_types, kernel_names, inputs );  
+    _runtime_ptr->register_kernels( kernel_inputs  );  
   }else std::cout << "No runtime available" << std::endl;
 
  return {}; 
