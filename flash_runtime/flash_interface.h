@@ -7,11 +7,12 @@
 
 class IFlashableRuntime
 {
+ 
   public:
 
     virtual status register_kernels(const std::vector<kernel_desc> & ) = 0;
 
-    virtual status execute(std::string kernel_name, uint num_of_inputs,
+    virtual status execute(runtime_vars, uint num_of_inputs,
                            std::vector<te_variable> kernel_args, 
                            std::vector<te_variable> exec_parms) = 0;
 };

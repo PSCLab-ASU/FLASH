@@ -3,7 +3,7 @@
 #include <ranges>
 #include <algorithm>
 #include <fstream>
-
+#include <tuple>
 //#include <experimental/ranges/algorithm>
 
 /* Registers the factory with flash factory*/
@@ -41,9 +41,11 @@ ocl_runtime::ocl_runtime()
   auto device_set = std::set(std::begin(*device_ids), std::end(*device_ids) );
   //create a powerset
   auto dev_comb   = powerset(device_set);
+
   //create all context ccombinationsa 
   std::ranges::for_each(dev_comb, [&](auto dev_set)
   {
+    std::cout << "Creating context " << dev_set.size() << std::endl;
     auto device_ss = std::vector(std::begin(dev_set), std::end(dev_set));
 
     //create contexts 
@@ -54,10 +56,15 @@ ocl_runtime::ocl_runtime()
 
 }
 
-status ocl_runtime::execute(std::string kernel_name, uint num_of_inputs, 
+status ocl_runtime::execute(runtime_vars rt_vars, uint num_of_inputs, 
                               std::vector<te_variable> kernel_args, std::vector<te_variable> exec_parms)
 {
-  std::cout << "Executing from opencl_runtime..." << std::endl;
+  std::cout << "Executing from opencl_runtime..." << rt_vars.get_lookup() << std::endl;
+  std::ranges::for_each(kernel_args, [](auto te_var)
+  {
+    std::cout << "sizes are : " << te_var.vec_size << std::endl;
+  });
+
   return {};
 }
 
@@ -72,10 +79,7 @@ status ocl_runtime::register_kernels( const std::vector<kernel_desc>& kds )
 
     auto binaries = _read_kernel_files(kds);
 
-    //really nice notation
-    //auto program_flow = _context & all(binaries) | std::views::transform( [](auto ctx, auto binary){} )
-    
-    _append_programs( binaries );   
+    _append_programs_kernels( binaries );   
 
   }
   else
@@ -83,55 +87,62 @@ status ocl_runtime::register_kernels( const std::vector<kernel_desc>& kds )
     std::cout << "Invalid input args..." << std::endl;
   }
 
+  std::cout << "completed registering kernels" << std::endl;
   return {}; 
 }
 
-std::vector<std::pair<std::string, std::optional<std::string> > >
+std::vector<std::tuple<std::string, std::optional<std::string>, std::optional<std::string> > >
 ocl_runtime::_read_kernel_files( const std::vector<kernel_desc>& kds)
 {
-  std::vector<std::pair<std::string, std::optional<std::string> > > binaries;
+  std::vector<std::tuple<std::string, std::optional<std::string>, 
+                         std::optional<std::string> > > binaries;
   //read alll file locations
   std::ranges::transform( kds, std::back_inserter(binaries), 
-  [](auto kd)
+  [](const kernel_desc& kd)
   {
-    auto kernel_name   = kd._kernel_name; 
-    auto impl_location = kd._kernel_definition;
+     auto kernel_name   = kd._kernel_name; 
+     auto impl_location = kd._kernel_definition;
+     
+     if( impl_location )
+     {
+       //read contents of file
+       std::ifstream bin(impl_location.value(), std::ios::binary);
 
-    if( impl_location )
-    {
-      //read contents of file
-      std::ifstream bin(impl_location.value(), std::ios::binary);
-
-      if( !bin.good() ) 
-      {
-        std::cout << "Could not locate " << impl_location.value() << std::endl;
-       return std::make_pair(kernel_name, std::optional<std::string>{} );
-      }
-      //return string content from file
-      std::string impl = std::string ((std::istreambuf_iterator<char>(bin)), std::istreambuf_iterator<char>());
-      return std::make_pair( kernel_name, std::optional(impl) );
-    }
-    else return std::make_pair(kernel_name, std::optional<std::string>{} );
+       if( !bin.good() ) 
+       {
+         std::cout << "Could not locate " << impl_location.value() << std::endl;
+         return std::make_tuple(kernel_name, impl_location, std::optional<std::string>{} );
+       }
+       //return string content from file
+       std::string impl = std::string ((std::istreambuf_iterator<char>(bin)), std::istreambuf_iterator<char>());
+       return std::make_tuple( kernel_name, impl_location, std::optional(impl) );
+      
+     }
+     else return std::make_tuple(kernel_name, impl_location, std::optional<std::string>{} );
     
   } );
 
   return binaries;
 }
 
-void ocl_runtime::_append_programs( auto binaries )
+void ocl_runtime::_append_programs_kernels( auto binaries )
 {
   //at this point all the programs are open in binaries
   std::ranges::for_each( _contexts, [&](auto& ocl_ctx){
     auto program_flow = binaries | std::views::transform( [&]( auto binary )
     {
+      auto kernel_name    = std::get<0>(binary);
+      auto impl_location  = std::get<1>(binary);
+      auto o_bin          = std::get<2>(binary);
+ 
       cl_int err;
-      auto ret = std::pair<std::string, std::optional<cl_program> >(binary.first, {} );
+      auto ret = ocl_program_t{impl_location};
 
-      if( binary.second )
+      if( o_bin )
       {
         //replicate implementation points
         size_t num_dev = ocl_ctx._dev_ids.size();
-        auto bin       = binary.second.value();
+        auto bin       = o_bin.value();
 
         auto impls = std::vector(num_dev, bin.c_str() );
         //replicate implement sizes
@@ -145,24 +156,45 @@ void ocl_runtime::_append_programs( auto binaries )
                                                   impl_sizes.data(), 
                                                   (const unsigned char **) impls.data(), 
                                                   binary_stats.data(), &err);
+        
 
         if( !std::ranges::all_of(binary_stats, unary_equals<int>{CL_SUCCESS} ) || 
-            err != CL_SUCCESS ) 
+            err != CL_SUCCESS  ) 
           return ret;
         else 
         {
-          std::cout << "Successfully created program for " << ret.first << std::endl;
-          return ret = std::make_pair(binary.first, program);
+          cl_int errr = clBuildProgram(program, num_dev, ocl_ctx._dev_ids.data(), "", NULL, NULL);
+          if( errr != CL_SUCCESS )
+          { 
+            std::cout << "Failed to Build " << ret.impl_location.value() << std::endl;
+            return ret;
+          }
+          else
+          {
+            std::cout << "Successfully created program for " << ret.impl_location.value() << std::endl;
+            ret.program = program;
+            //create the kernel
+            auto kernel = clCreateKernel( program, kernel_name.c_str(),  &err);
+            if( err == CL_SUCCESS)
+              ret.kernels[kernel_name] = kernel;
+            else
+              ret.kernels[kernel_name] = {};
+             
+            return ret;
+          }
+
         }
       }
       else return ret;
 
     } ); //end of program_flow
 
-    for( auto binary : program_flow ) 
-      ocl_ctx._programs.emplace(binary.first, binary.second);
+    std::cout << "processing contexts" << std::endl;
+    for( auto program : program_flow ) 
+      ocl_ctx._programs.emplace_back(program);
 
   } ); //end of each context
+  std::cout << "end of append" << std::endl;
 
 }
 

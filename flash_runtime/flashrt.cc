@@ -27,14 +27,14 @@ flash_rt::flash_rt( std::string lookup)
   
 }
 
-status flash_rt::execute(std::string kernel_name, uint num_of_inputs, 
-                              std::vector<te_variable> kernel_args, std::vector<te_variable> exec_parms)
+status flash_rt::execute(runtime_vars rt_vars,  uint num_of_inputs, 
+                         std::vector<te_variable> kernel_args, std::vector<te_variable> exec_parms)
 {
   std::cout << "calling flash_rt::" << __func__ << std::endl;
   //check if thier is a runtime exists
   if( _runtime_ptr )
   {
-    _runtime_ptr->execute(kernel_name, num_of_inputs, kernel_args, exec_parms );  
+    _runtime_ptr->execute(rt_vars, num_of_inputs, kernel_args, exec_parms );  
   }else std::cout << "No runtime available" << std::endl;
   return {};
 }
@@ -61,5 +61,6 @@ status flash_rt::register_kernels( size_t num_kernels, kernel_t kernel_types[],
     _runtime_ptr->register_kernels( kernel_inputs  );  
   }else std::cout << "No runtime available" << std::endl;
 
+ std::cout << "completed flash_rt::" << __func__ << std::endl;
  return {}; 
 }

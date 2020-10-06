@@ -30,7 +30,7 @@ class flash_rt
  
     status register_kernels( size_t, kernel_t [], std::string [], std::optional<std::string> [] );
 
-    status execute( std::string, uint, std::vector<te_variable>, std::vector<te_variable> ); 
+    status execute( runtime_vars, uint, std::vector<te_variable>, std::vector<te_variable> ); 
 
 
   private:

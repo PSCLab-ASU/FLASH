@@ -6,8 +6,28 @@
 #include <functional>
 #include <string_view>
 #include <optional>
+#include <ranges>
+#include <algorithm>
 
 #pragma once 
+
+using override_kernel_t = std::pair<
+                            std::string,
+                            std::optional<
+                              std::pair<
+                                std::optional<std::string>,
+                                std::optional<std::string> > > >;
+
+
+struct runtime_vars
+{
+  std::string lookup;
+  std::optional<std::string> kernel_name_override;
+  std::optional<std::string> kernel_impl_override;
+  std::string get_lookup(){ return lookup; } 
+};
+
+
 enum struct kernel_t { INT_SRC, EXT_SRC, INT_BIN, EXT_BIN }; 
 
 template<kernel_t k_type=kernel_t::INT_SRC, typename T=std::string, typename R=void, typename ... Args>
@@ -90,8 +110,13 @@ auto powerset(const S& s)
             x.insert(e);
             rs.insert(x);
         }
-        ret.insert(begin(rs), end(rs));
+
+        ret.insert(std::begin(rs), std::end(rs));
     }
+
+    //erase the first element
+    ret.erase( ret.begin() );
+
     return ret;
 } 
 
