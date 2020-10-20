@@ -7,15 +7,27 @@
 #include <flash_runtime/flash_interface.h>
 #include <flash_runtime/flashable_factory.h>
 
-struct kernel_details
+#pragma once
+
+struct options
 {
 
 };
 
-struct device_state
+struct subaction
 {
+  ulong subaction_id;
+  uint num_inputs;
+  runtime_vars rt_vars;
+  std::vector<te_variable> kernel_args;
+  std::vector<size_t> exec_parms;
+  options opt;
 
-  kernel_details _kernel_details;
+  auto input_vars( ) 
+  { 
+    return std::make_tuple(num_inputs, rt_vars, kernel_args, exec_parms );
+  };
+
 };
 
 
@@ -26,11 +38,15 @@ class flash_rt
 
   public:
 
-    static std::shared_ptr<flash_rt> get_runtime( std::string );
+    static std::shared_ptr<flash_rt> get_runtime( std::string="" );
  
     status register_kernels( size_t, kernel_t [], std::string [], std::optional<std::string> [] );
 
-    status execute( runtime_vars, uint, std::vector<te_variable>, std::vector<te_variable> ); 
+    status execute( runtime_vars, uint, std::vector<te_variable>, std::vector<size_t>, options ); 
+   
+    ulong create_transaction();
+
+    status process_transaction( ulong );
 
 
   private:
@@ -41,9 +57,8 @@ class flash_rt
     std::optional<FlashableRuntimeInfo>  _backend;
     std::shared_ptr<IFlashableRuntime>   _runtime_ptr;
 
-    std::vector<kernel_details> _kernels;
 
-    std::vector<device_state> _devices;
+    std::multimap<ulong, subaction> _transactions;
 
     static std::shared_ptr<flash_rt> _global_ptr; 
     

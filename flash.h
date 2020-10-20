@@ -70,7 +70,7 @@ struct SubmitObj
 
     //start forward execution path
     template<typename ... Us>
-    void _forward_exec(Us ... );
+    void _forward_exec(ulong, ulong&, Us ... );
 
     template<typename T> friend class ExecObj;
 
@@ -200,30 +200,31 @@ class RuntimeObj
         }
 
         template<typename NumInputs, typename B, typename I, typename Kernel>
-        void execute(Kernel kernel, NumInputs, std::function<void()> context, 
+        void execute(auto trans_sub_id, Kernel kernel, NumInputs, std::function<void()> context, 
                      B buffers, std::array<size_t, std::tuple_size_v<B> > sizes, I items )
         {
             //std::cout << "Executing " << kernel_id << "..." << std::endl;
-            std::array<size_t, std::tuple_size_v<I> > item_sizes;
-            item_sizes.fill(1);
-
-            auto _te_buffers = erase_tuple( buffers, sizes );
-            auto _te_items   = erase_tuple( items, item_sizes ); 
+            auto arr         = get_array_from_tuple( items );
+            
             auto _rt_vars    = runtime_vars{ kernel.get_method(),
                                              kernel.get_method_ovr(),
                                              kernel.get_kernel_details() };
+            auto _te_buffers = erase_tuple( buffers, sizes );
+	    auto exec_parms  = std::vector<size_t>( arr.begin(), arr.end() );
+	    //set transactio information
+            _rt_vars.associate_transactions( trans_sub_id );
 
-            _runtimeImpl->execute( _rt_vars, NumInputs::value, _te_buffers, _te_items); 
+            _runtimeImpl->execute( _rt_vars, NumInputs::value, _te_buffers, exec_parms, options{}); 
             //money maker: this function will interface with the runime Object
         }
 
         //does nothing in runtime obj
         template<typename ... Us>
-        void _forward_exec(Us ... items) {
+        void _forward_exec( ulong tid, ulong& sa_id, Us ... items) {
             if constexpr (std::is_same_v<NullType, _Upstream>) return;
             else
             {
-              if( _upstream ) _upstream->_forward_exec();
+              if( _upstream ) _upstream->_forward_exec(tid, sa_id, items...);
               else std::cout << "Could not find upstream" << std::endl;    
             }
             
@@ -255,9 +256,14 @@ template<std::unsigned_integral ... Us>
 ExecObj< SubmitObj<Upstream, NumInputs, Kernel, Ts...> > 
 SubmitObj<Upstream, NumInputs, Kernel, Ts...>::exec(Us... items)
 {
-    std::cout << "Start exec..." << std::endl; 
+  std::cout << "Start exec..." << std::endl;
+  ulong subaction_id   = 0;
+  //create a unique_id and makes sure thier is no conflicting Id
+  ulong transaction_id = flash_rt::get_runtime()->create_transaction();
   //execute kernels from root node, forward
-  _forward_exec(items...);
+  _forward_exec(transaction_id, subaction_id, items...);
+
+  flash_rt::get_runtime()->process_transaction( transaction_id );
 
   return ExecObj(*this);
 }
@@ -295,15 +301,17 @@ SubmitObj<Upstream, NumInputs, Kernel, Ts...>& SubmitObj<Upstream, NumInputs, Ke
 
 template<typename Upstream, typename NumInputs, typename Kernel, typename ... Ts>
 template< typename ... Us>
-void SubmitObj<Upstream, NumInputs, Kernel, Ts...>::_forward_exec(Us ... items )
+void SubmitObj<Upstream, NumInputs, Kernel, Ts...>::_forward_exec(ulong trans_id, ulong& subaction_id, Us ... items )
 {  
   //will call prior forward excute until it gets to the root runtime object
-  _upstream->_forward_exec(items...);
+  _upstream->_forward_exec(trans_id, subaction_id, items...);
   //Executing 
-  _upstream->execute(_override_kernel, std::integral_constant<uint, NumInputs::value>{},
+  auto trans_sub_id = std::make_pair(trans_id, subaction_id );
+  _upstream->execute(trans_sub_id, _override_kernel, std::integral_constant<uint, NumInputs::value>{},
                      _snapshot, _buffers, _sizes, std::make_tuple(items...) );
 
-
+  std::cout << "subaction id = " << subaction_id << std::endl;
+  subaction_id++;
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 template<std::size_t N>

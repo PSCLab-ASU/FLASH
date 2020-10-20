@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <fstream>
 #include <tuple>
-//#include <experimental/ranges/algorithm>
+#include <climits>
+
+
 
 /* Registers the factory with flash factory*/
 bool ocl_runtime::_registered = FlashableRuntimeFactory::Register(
@@ -38,34 +40,149 @@ ocl_runtime::ocl_runtime()
   cl_int err;
   //get all the device ids
   auto device_ids = _get_devices();
-  auto device_set = std::set(std::begin(*device_ids), std::end(*device_ids) );
-  //create a powerset
-  auto dev_comb   = powerset(device_set);
-
-  //create all context ccombinationsa 
-  std::ranges::for_each(dev_comb, [&](auto dev_set)
+  if( device_ids ) 
   {
-    std::cout << "Creating context " << dev_set.size() << std::endl;
-    auto device_ss = std::vector(std::begin(dev_set), std::end(dev_set));
+    //save off device list
+    //
+    for( auto did : *device_ids) _device_usage_table.emplace(did, 0);  
 
-    //create contexts 
-    auto ctx = clCreateContext( NULL, device_ss.size(), device_ss.data(), NULL, NULL, &err);
-    this->_contexts.emplace_back( ctx, device_ss );
+    auto device_set = std::set(std::begin(*device_ids), std::end(*device_ids) );
+    //create a powerset
+    auto dev_comb   = powerset(device_set);
+  
+    //create all context ccombinationsa 
+    std::ranges::for_each(dev_comb, [&](auto dev_set)
+    {
+      std::cout << "Creating context " << dev_set.size() << std::endl;
+      auto device_ss = std::vector(std::begin(dev_set), std::end(dev_set));
+  
+      //create contexts 
+      auto ctx = clCreateContext( NULL, device_ss.size(), device_ss.data(), NULL, NULL, &err);
+  
+      if( err == CL_SUCCESS ) 
+      { 
+        auto octx = this->_contexts.emplace_back( ctx, device_ss );
+  
+        //create device buffers
+        std::ranges::for_each(device_ss, [&](auto device_id)
+        {
+          auto queue = clCreateCommandQueueWithProperties( ctx, device_id, NULL, &err);
+          
+          if( err == CL_SUCCESS ) 
+          { 
+            octx._queues.emplace_back( queue );
+          } 
+          else std::cout << "Could not create command queues" << std::endl;
+  
+        } );
+      }
+      else std::cout << "Could not create context for device(s)" << std::endl; 
+  
+    } );
+  }
+  else std::cout << "No devices found " << std::endl;
+}
 
-  } );
+status ocl_runtime::wait( ulong  wid)
+{
+  //get job from pending jobs  
+  if(auto pjob = _pending_jobs.find(wid); 
+     pjob != _pending_jobs.end() )
+  {
+    auto transfer_status = pjob->second.transfer_all(); 
+  }
+  else std::cout << "Could not find wid = " << wid << std::endl;
 
+  return status{};
 }
 
 status ocl_runtime::execute(runtime_vars rt_vars, uint num_of_inputs, 
-                              std::vector<te_variable> kernel_args, std::vector<te_variable> exec_parms)
+                              std::vector<te_variable> kernel_args, std::vector<size_t> exec_parms)
 {
   std::cout << "Executing from opencl_runtime..." << rt_vars.get_lookup() << std::endl;
-  std::ranges::for_each(kernel_args, [](auto te_var)
-  {
-    std::cout << "sizes are : " << te_var.vec_size << std::endl;
-  });
+  uint n_inputs = num_of_inputs;
+  uint arg_index=0;
+  cl_event c_event;
+  ulong wid;
 
-  return {};
+  auto [ctx, kernel, queue, valid, dev_id] = _try_get_exec_parms( rt_vars.get_lookup() );
+
+  //converts host buffers to cl_mem object and transfer data to device
+  auto hbuff_to_clmem = [&]( auto hbuffer ) -> cl_mem
+  {
+    int buffer_properties;
+    cl_int err;
+    size_t sz = hbuffer.type_size * hbuffer.vec_size;
+
+    if( n_inputs-- ) buffer_properties = CL_MEM_READ_ONLY;
+    else buffer_properties = CL_MEM_READ_WRITE;   
+ 
+    auto dbuffer = clCreateBuffer( ctx, buffer_properties, sz, NULL, &err);
+    
+    if( err != CL_SUCCESS) throw std::runtime_error("Could not create buffer");
+   
+
+    return dbuffer;
+  };
+
+  //sets cl_mem object to corresponding argument
+  auto set_kernel_args = [&] (auto dbuffer) -> std::pair<cl_mem, int>
+  {
+     
+     return std::make_pair( dbuffer, 
+                            (int) clSetKernelArg(kernel, arg_index++, sizeof(cl_mem), (void *) dbuffer  ) ); 
+  };
+  
+
+  if( valid )
+  {
+    //transform host buffers to cl_mem buffers
+    auto buffer_transfers = kernel_args | std::views::transform( hbuff_to_clmem ) | 
+                            std::views::transform( set_kernel_args );
+
+
+    bool complete = false;
+    std::vector<cl_mem> dev_buffers;
+
+    for(auto [buffer, cl_status] : buffer_transfers)
+    {
+      complete &= (cl_status == CL_SUCCESS);
+      dev_buffers.push_back(buffer);  
+    }
+   
+    //move data to device 
+    wid = _add_to_pending_jobs( num_of_inputs, kernel_args, dev_buffers, queue );
+    auto pentry = _pending_jobs.at(wid);
+
+    //move all inputs to device includeing READ_WRITES
+    //defaults to HOST
+    pentry.transfer_all<MEM_MOVE::TO_DEVICE>();
+    
+    if( complete )
+    { 
+      int ciErrNum;
+      //execute method input args are ready
+      ciErrNum = clEnqueueNDRangeKernel(queue, kernel, exec_parms.size(), NULL, 
+                                        exec_parms.data(), NULL, 0, NULL, &c_event);      
+      //increment device_Id
+      //useful when I add out of order execution for load balancing
+      _device_usage_table.at( dev_id )++; 
+
+      //remove this line after transactio nsupport
+      pentry.set_event( std::move(c_event) );
+
+      auto stat = status{0, wid };
+
+      return stat;
+
+      //_process_output( num_of_inputs, kernel_args, dev_buffers );
+
+    } else std::cout << "Could not transfer buffers to device" << std::endl;
+    
+  } else std::cout << "Could not find kernel" << std::endl;
+ 
+
+  return status{-1};
 }
 
 status ocl_runtime::register_kernels( const std::vector<kernel_desc>& kds ) 
@@ -78,8 +195,10 @@ status ocl_runtime::register_kernels( const std::vector<kernel_desc>& kds )
   {
 
     auto binaries = _read_kernel_files(kds);
+    
+    _append_programs_kernels( binaries );
 
-    _append_programs_kernels( binaries );   
+
 
   }
   else
@@ -254,4 +373,101 @@ ocl_runtime::_get_devices( )
 
 }
 
+std::tuple<cl_context, cl_kernel, cl_command_queue, bool, cl_device_id>
+ocl_runtime::_try_get_exec_parms( std::string method_name)
+{
+   auto single_ctx_rule = [](auto ctx ) { return ctx._dev_ids.size() == 1; };
+   uint dev_occupancy = UINT_MAX;
+   cl_context ctx; cl_kernel clk; cl_command_queue cq; bool valid;
+   cl_device_id dev_id;
+
+   //Crude available device lookup. Only works for single device
+   auto single_ctx = _contexts | std::views::filter(single_ctx_rule);
+
+   std::ranges::for_each( single_ctx, [&](auto octx) 
+   {
+     std::ranges::for_each( octx._programs, [&](auto oprog)
+     {
+       for(auto[k_name, k_obj] : oprog.kernels )
+       {
+         if ( (k_name == method_name) && k_obj)
+           if( _device_usage_table.at( octx._dev_ids.at(0) ) < dev_occupancy)
+           {
+             ctx    = octx._ctx;
+             clk    = k_obj.value();
+             cq     = octx._queues[0];
+             dev_id = octx._dev_ids.at(0);       
+             dev_occupancy = _device_usage_table.at( dev_id );
+             valid = true;
+           }
+         
+       }
+     });
+   });
+   
+   return std::make_tuple(ctx, clk, cq, valid, dev_id);
+}
+
+ulong ocl_runtime::_add_to_pending_jobs( uint num_input, 
+                                         std::vector<te_variable> kernel_args, 
+                                         std::vector<cl_mem> device_buffer,
+                                         cl_command_queue cq)
+{
+  ulong wid = random_number();
+
+  auto pj = pending_job_t{ .num_inputs = num_input,.kernel_args = kernel_args,.device_buffers = device_buffer,.cq = cq  };
+  _pending_jobs[wid] = std::move(pj);
+
+  return wid;
+}
+
+template<MEM_MOVE dir>
+status pending_job_t::transfer(uint src, uint dst)
+{
+  cl_int err;
+  if( kernel_args.size() != device_buffers.size())
+    std::cout << "Error mismatch pending job sizes" << std::endl;
+
+  if( dir == MEM_MOVE::TO_DEVICE ) 
+  {
+    //copy data to device buffer
+    std::cout << "Moving arg "<< dst << " to device " << std::endl;
+    size_t sz = kernel_args[src].type_size * kernel_args[src].vec_size;
+    err = clEnqueueWriteBuffer(cq, device_buffers[dst], CL_TRUE, 0, sz, kernel_args[src].data, 0, NULL, NULL);
+
+    if( err != CL_SUCCESS) throw std::runtime_error("Could not transfer buffer from host to device");
+  }
+  else
+  {
+    //copy data to device buffer
+    std::cout << "Moving device bufer "<< dst << " to host " << std::endl;
+    size_t sz = kernel_args[dst].type_size * kernel_args[dst].vec_size;
+    err = clEnqueueReadBuffer(cq, device_buffers[src], CL_TRUE, 0, sz, kernel_args[dst].data, 1, &event, NULL);
+
+    if( err != CL_SUCCESS) throw std::runtime_error("Could not transfer buffer from host to device");
+
+  }
+
+  return status{};
+
+}
+
+//does not support READ_WRITE parameters yet
+template<MEM_MOVE dir>
+status pending_job_t::transfer_all()
+{
+
+  if( dir == MEM_MOVE::TO_DEVICE ) 
+  {
+    for( auto i : std::views::iota(num_inputs) ) 
+      transfer<dir>(i, i);
+  }
+  else
+  {
+    for( auto i : std::views::iota(num_inputs, kernel_args.size() ) ) 
+      transfer( i, i );
+
+  }
+  return status{};
+}
 

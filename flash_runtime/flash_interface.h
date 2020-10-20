@@ -14,7 +14,8 @@ class IFlashableRuntime
 
     virtual status execute(runtime_vars, uint num_of_inputs,
                            std::vector<te_variable> kernel_args, 
-                           std::vector<te_variable> exec_parms) = 0;
+                           std::vector<size_t> exec_parms) = 0;
+    virtual status wait( ulong ) =0;
 };
 
 

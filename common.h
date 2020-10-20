@@ -8,8 +8,12 @@
 #include <optional>
 #include <ranges>
 #include <algorithm>
+#include <climits>
+#include <random>
 
 #pragma once 
+
+enum struct MEM_MOVE { TO_DEVICE, TO_HOST };
 
 using override_kernel_t = std::pair<
                             std::string,
@@ -24,7 +28,16 @@ struct runtime_vars
   std::string lookup;
   std::optional<std::string> kernel_name_override;
   std::optional<std::string> kernel_impl_override;
+  std::pair<ulong, ulong> trans_subaction_id;
+
   std::string get_lookup(){ return lookup; } 
+  std::pair<ulong, ulong> get_ids() { return trans_subaction_id; }
+
+  void associate_transactions( auto trans_sa_id )
+  {
+    trans_subaction_id = trans_sa_id;
+  }
+
 };
 
 
@@ -48,22 +61,16 @@ struct unary_equals{
   T _val;
 };
 
-/*template<typename Input, typename Container, typename Output>
-struct complex_stage 
-{
-  
-  auto operator()(Input& input)
+struct status {
+  int err;
+  std::optional<ulong> work_id;
+
+  operator bool()
   {
-    return input | std::views::transform(_expansion ) | std::views::transform(_reduction );
+    return err == 0;
   }
 
-
-  std::function<Container(Input)> _expansion;
-  std::function<Ouput(Container)> _reduction;
 };
-*/
-
-struct status {};
 
 struct te_variable
 {
@@ -119,4 +126,20 @@ auto powerset(const S& s)
 
     return ret;
 } 
+
+template<typename T>
+constexpr auto get_array_from_tuple(T&& tuple)
+{
+  constexpr auto get_array = [](auto&& ... x){ return std::array{std::forward<decltype(x)>(x) ... }; };
+  return std::apply(get_array, std::forward<T>(tuple));
+}
+
+inline ulong random_number()
+{
+  std::random_device rd;  //Will be used to obtain a seed for the random number engine
+  std::mt19937 gen(rd()); //Standard mersenne_twister_engine seeded with rd()
+  std::uniform_int_distribution<ulong> distrib(0, ULONG_MAX);
+  ulong num = distrib(gen);
+  return num;
+}
 
