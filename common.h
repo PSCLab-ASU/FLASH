@@ -90,7 +90,7 @@ std::vector<te_variable> erase_tuple( std::tuple<Ts...> tup,  std::array<size_t,
   auto fill = [&]<std::size_t... I >(std::index_sequence<I...> )
   {
     bool dummy[N] ={ (_te_vars.push_back({(void *) std::get<I>(tup), 
-                      sizeof(std::tuple_element_t<I,tuple_type>),
+                      sizeof(std::remove_pointer_t<std::tuple_element_t<I,tuple_type> >),
                       sizes[I]} ), false)...};
                        
   }; 

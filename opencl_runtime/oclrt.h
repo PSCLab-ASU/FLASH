@@ -91,7 +91,7 @@ class ocl_runtime : public IFlashableRuntime
     std::tuple<cl_context, cl_kernel, cl_command_queue, bool, cl_device_id>
     _try_get_exec_parms( std::string );
 
-    ulong _add_to_pending_jobs( uint, std::vector<te_variable>, std::vector<cl_mem>, cl_command_queue );
+    ulong _add_to_pending_jobs( uint, std::vector<te_variable>&, std::vector<cl_mem>&, cl_command_queue& );
 
     std::vector<ocl_context_t>     _contexts;
     std::vector<kernel_desc>       _kernels;

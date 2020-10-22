@@ -34,6 +34,12 @@ status flash_rt::execute(runtime_vars rt_vars,  uint num_of_inputs,
   //need to store all arguments for later processing through process_transaction
   auto[trans_id, suba_id] = rt_vars.get_ids();
   //create a subactions
+  std::ranges::for_each(kernel_args, [](auto arg)
+  {
+    if( arg.data == nullptr) std::cout << "flashrt::kernelarg == nullptr" << std::endl;
+
+  });
+
   auto sa = subaction{suba_id, num_of_inputs, rt_vars, kernel_args, exec_parms, opt};
   //add transactio and subactionsa
   _transactions.emplace( trans_id, sa );
@@ -76,28 +82,33 @@ ulong flash_rt::create_transaction()
 
 status flash_rt::process_transaction( ulong tid )
 {
-  std::cout << "calling flash_rt::" << __func__ << std::endl;
+  std::cout << "calling flash_rt::" << __func__ <<"("<<tid <<")" << std::endl;
   ///////////////////////////////////////////////////////////
   std::vector<status> statuses;
+ 
   auto [b_iter, e_iter] = _transactions.equal_range(tid);
 
   
+  std::cout << "--Got transactions" << std::endl;
   if( !_runtime_ptr ) std::runtime_error("No backend selected/available!");
 
   if( auto dist = std::distance(b_iter, e_iter); dist != 0  )
   {
+    std::cout << "--- dist != 0" << std::endl;
     //check if thier is a runtime exists
     //std::vector<std::reference_wrapper<subaction> > pipeline(b_iter, e_iter);
     std::vector<std::reference_wrapper<subaction> > pipeline;
 
-    std::transform( b_iter, e_iter, std::back_inserter( pipeline ), []( auto subacts )
+    std::transform( b_iter, e_iter, std::back_inserter( pipeline ), []( auto& subacts )
     {
       return std::ref(subacts.second); 
     } );
 
+    std::cout << "---- transformation complete" << std::endl;
     //sort by subaction id
     std::ranges::sort( pipeline, {}, &subaction::subaction_id);
 
+    std::cout << "---- sorting complete" << std::endl;
     //submit subactions
     std::for_each( pipeline.begin(), pipeline.end(), [&](subaction& stage)
     {
@@ -106,13 +117,16 @@ status flash_rt::process_transaction( ulong tid )
 
     });
 
+    std::cout << "---- foreach complete" << std::endl;
     ///wait for work to complete
     auto completed = statuses | std::views::filter( unary_equals{true} ) |  std::views::transform([&](auto stat)
     {
       if( stat.work_id )
       {
         auto wid = stat.work_id.value();
+        std::cout << "waiting on " << wid << " to complete..." << std::endl;
         return _runtime_ptr->wait( wid );
+        std::cout << "completed " << wid << std::endl;
       }
       else 
       {
@@ -122,7 +136,10 @@ status flash_rt::process_transaction( ulong tid )
 
     } ); 
 
+    std::cout << "----- starting pipeline" << std::endl;
     auto all_complete = std::ranges::all_of( completed, unary_equals{0}, &status::err );
+    std::cout << "----- pipeline complete" << std::endl;
+
     if( all_complete ) std::cout << "successfully completed tid = " << tid << std::endl;
     else std::cout << "failed to complete tid = " << tid << std::endl; 
 

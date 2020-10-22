@@ -249,6 +249,7 @@ SubmitObj<Upstream, NumInputs, Kernel, Ts...>::SubmitObj(Upstream upst, NumInput
     if constexpr( _num_inputs  != 0 )
     std::cout << " SubmitObj ctor " << std::endl;
     _override_kernel = dynamic_override;
+    _buffers = std::make_tuple(ts...);
 }
 
 template<typename Upstream, typename NumInputs, typename Kernel, typename ... Ts>

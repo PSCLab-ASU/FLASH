@@ -1,10 +1,13 @@
+#include <vector>
 #include <flash.h>
+#include <boost/align/aligned_allocator.hpp>
 
 
+using MATMULT = KernelDefinition<"elmatmult_generic", kernel_t::EXT_BIN, float*, float*>; 
+using MATDIV  = KernelDefinition<"elmatdiv_generic",  kernel_t::EXT_BIN, float*, float*>; 
 
-using MATMULT = KernelDefinition<"MATMULT", kernel_t::EXT_BIN, float*, float*>; 
-using MATADD  = KernelDefinition<"MATADD",  kernel_t::EXT_BIN, float*, float*>; 
-using MATSUB  = KernelDefinition<"MATSUB",  kernel_t::EXT_BIN, float*, float*>;
+template <typename T>
+using aligned_vector = std::vector<T, boost::alignment::aligned_allocator<T, 64>>;
 
 int main(int argc, const char * argv[])
 {
@@ -13,18 +16,35 @@ int main(int argc, const char * argv[])
     // Builder
     // Lookup
     // Self-registry factory
-    float * A, *B, *C;
+    size_t sz = 512;
+    auto chunk = aligned_vector<float>(6*sz, 2);
+    float * A = chunk.data(), *B = A + sz, *C = B + sz;
+    float * E = C + sz, *F = E + sz, *G = F + sz;
+
     std::string dir = "/archive-t2/Design/fpga_computing/wip/fpga_exmaples/bin/";
     RuntimeObj ocrt(flash_rt::get_runtime("INTEL_FPGA") , 
                     MATMULT{dir + "elwise_matmult_gen.aocx" }, 
-                    MATADD {dir + "elwise_matdiv_gen.aocx"  }, 
-                    MATSUB {dir + "elwise_matmult_gen.aocx" } );
+                    MATDIV{dir + "elwise_matdiv_gen.aocx"   } );
     //submit
-    //ocrt.submit(MATMULT{}, A, B, C).sizes(25UL, 25UL, 25UL).exec(25UL, 25UL, 25UL);       //work items
-    ocrt.submit(MATMULT{}, A, B, C).sizes(25UL, 25UL).defer(25UL, 25UL, 25UL).
-         submit(MATADD{},  A, B, C).sizes(25UL, 25UL, 25UL).defer(25UL, 25UL, 25UL).
-         submit(MATSUB{},  A, B, C).sizes(25UL, 25UL, 25UL).exec(25UL, 25UL, 25UL);
-  
+    ocrt.submit(MATMULT{}, A, B, C).sizes(sz,sz,sz).defer(sz, sz, sz).
+         submit(MATDIV{},  E, F, G).sizes(sz,sz,sz).exec(sz, sz, sz);
+
+    
+    std::cout << "C = ";
+    for(auto i : std::views::iota(0,9) )
+    {
+      std::cout << C[i] << ",";
+    }
+    std::cout << C[10] << std::endl;
+
+    std::cout << "G = ";
+    for(auto i : std::views::iota(0, 9) )
+    {
+      std::cout << G[i] << ",";
+    }
+    std::cout << G[10] << std::endl;
+    
+
     return 0;
 }
 

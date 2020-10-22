@@ -61,7 +61,7 @@ ocl_runtime::ocl_runtime()
   
       if( err == CL_SUCCESS ) 
       { 
-        auto octx = this->_contexts.emplace_back( ctx, device_ss );
+        auto& octx = this->_contexts.emplace_back( ctx, device_ss );
   
         //create device buffers
         std::ranges::for_each(device_ss, [&](auto device_id)
@@ -70,7 +70,7 @@ ocl_runtime::ocl_runtime()
           
           if( err == CL_SUCCESS ) 
           { 
-            octx._queues.emplace_back( queue );
+            octx._queues.emplace_back( std::move(queue) );
           } 
           else std::cout << "Could not create command queues" << std::endl;
   
@@ -89,26 +89,40 @@ status ocl_runtime::wait( ulong  wid)
   if(auto pjob = _pending_jobs.find(wid); 
      pjob != _pending_jobs.end() )
   {
+    std::cout << "waiting on wid = " << wid << std::endl;
     auto transfer_status = pjob->second.transfer_all(); 
+    _pending_jobs.erase(pjob);
+
   }
   else std::cout << "Could not find wid = " << wid << std::endl;
-
+  
+ 
   return status{};
 }
 
 status ocl_runtime::execute(runtime_vars rt_vars, uint num_of_inputs, 
                               std::vector<te_variable> kernel_args, std::vector<size_t> exec_parms)
 {
-  std::cout << "Executing from opencl_runtime..." << rt_vars.get_lookup() << std::endl;
+  std::cout << "Executing from opencl_runtime..." << __func__ << std::endl;
+  std::cout << "Executing : " << rt_vars.get_lookup() <<" ..."<< std::endl;
+  int ciErrNum;
   uint n_inputs = num_of_inputs;
   uint arg_index=0;
   cl_event c_event;
   ulong wid;
 
+  std::ranges::for_each( kernel_args, [](auto& arg)
+  {
+     if( arg.data == nullptr) 
+       std::cout << "kernel_arg = nullptr" << std::endl;
+
+  });
+
+
   auto [ctx, kernel, queue, valid, dev_id] = _try_get_exec_parms( rt_vars.get_lookup() );
 
   //converts host buffers to cl_mem object and transfer data to device
-  auto hbuff_to_clmem = [&]( auto hbuffer ) -> cl_mem
+  auto hbuff_to_clmem = [&]( auto& hbuffer ) //-> cl_mem
   {
     int buffer_properties;
     cl_int err;
@@ -117,50 +131,49 @@ status ocl_runtime::execute(runtime_vars rt_vars, uint num_of_inputs,
     if( n_inputs-- ) buffer_properties = CL_MEM_READ_ONLY;
     else buffer_properties = CL_MEM_READ_WRITE;   
  
-    auto dbuffer = clCreateBuffer( ctx, buffer_properties, sz, NULL, &err);
-    
+    auto dbuffer = clCreateBuffer( ctx, buffer_properties, sz, NULL, &err); 
+
     if( err != CL_SUCCESS) throw std::runtime_error("Could not create buffer");
    
-
-    return dbuffer;
+    return std::move(dbuffer);
   };
 
   //sets cl_mem object to corresponding argument
-  auto set_kernel_args = [&] (auto dbuffer) -> std::pair<cl_mem, int>
+  auto set_kernel_args = [&] (auto&& dbuffer) 
   {
-     
-     return std::make_pair( dbuffer, 
-                            (int) clSetKernelArg(kernel, arg_index++, sizeof(cl_mem), (void *) dbuffer  ) ); 
+     cl_int err;
+
+     err = clSetKernelArg(kernel, arg_index++, sizeof(cl_mem), &dbuffer  );
+
+     return std::make_pair(std::forward<cl_mem>(dbuffer), err);
   };
   
-
   if( valid )
   {
+    std::vector<cl_mem> dev_buffers;
+    bool complete = true;
+
     //transform host buffers to cl_mem buffers
     auto buffer_transfers = kernel_args | std::views::transform( hbuff_to_clmem ) | 
                             std::views::transform( set_kernel_args );
 
-
-    bool complete = false;
-    std::vector<cl_mem> dev_buffers;
-
-    for(auto [buffer, cl_status] : buffer_transfers)
+    for(auto&& [buffer, cl_status] : buffer_transfers)
     {
-      complete &= (cl_status == CL_SUCCESS);
-      dev_buffers.push_back(buffer);  
+      complete &= cl_status == CL_SUCCESS; 
+      dev_buffers.push_back( std::forward<cl_mem>(buffer) );
     }
-   
-    //move data to device 
-    wid = _add_to_pending_jobs( num_of_inputs, kernel_args, dev_buffers, queue );
-    auto pentry = _pending_jobs.at(wid);
 
-    //move all inputs to device includeing READ_WRITES
-    //defaults to HOST
-    pentry.transfer_all<MEM_MOVE::TO_DEVICE>();
-    
     if( complete )
     { 
-      int ciErrNum;
+
+      //move data to device 
+      wid = _add_to_pending_jobs( num_of_inputs, kernel_args, dev_buffers, queue );
+      auto& pentry = _pending_jobs.at(wid);
+      std::cout << " adding wid : " << wid << std::endl;
+      //move all inputs to device includeing READ_WRITES
+      //defaults to HOST
+      pentry.transfer_all<MEM_MOVE::TO_DEVICE>();
+
       //execute method input args are ready
       ciErrNum = clEnqueueNDRangeKernel(queue, kernel, exec_parms.size(), NULL, 
                                         exec_parms.data(), NULL, 0, NULL, &c_event);      
@@ -177,7 +190,7 @@ status ocl_runtime::execute(runtime_vars rt_vars, uint num_of_inputs,
 
       //_process_output( num_of_inputs, kernel_args, dev_buffers );
 
-    } else std::cout << "Could not transfer buffers to device" << std::endl;
+    } else std::cout << "Could not prepare buffers" << std::endl;
     
   } else std::cout << "Could not find kernel" << std::endl;
  
@@ -295,7 +308,10 @@ void ocl_runtime::_append_programs_kernels( auto binaries )
             //create the kernel
             auto kernel = clCreateKernel( program, kernel_name.c_str(),  &err);
             if( err == CL_SUCCESS)
+            {
+              std::cout << "Successfully created kernel for " << kernel_name.c_str() << std::endl;
               ret.kernels[kernel_name] = kernel;
+            }
             else
               ret.kernels[kernel_name] = {};
              
@@ -373,34 +389,35 @@ ocl_runtime::_get_devices( )
 
 }
 
-std::tuple<cl_context, cl_kernel, cl_command_queue, bool, cl_device_id>
+std::tuple<cl_context, cl_kernel, cl_command_queue, bool, cl_device_id >
 ocl_runtime::_try_get_exec_parms( std::string method_name)
 {
-   auto single_ctx_rule = [](auto ctx ) { return ctx._dev_ids.size() == 1; };
+   auto single_ctx_rule = [](auto& ctx ) { return ctx._dev_ids.size() == 1; };
    uint dev_occupancy = UINT_MAX;
    cl_context ctx; cl_kernel clk; cl_command_queue cq; bool valid;
    cl_device_id dev_id;
+   uint cnt = 0;
 
    //Crude available device lookup. Only works for single device
    auto single_ctx = _contexts | std::views::filter(single_ctx_rule);
 
-   std::ranges::for_each( single_ctx, [&](auto octx) 
+   std::ranges::for_each( single_ctx, [&](auto& octx) 
    {
-     std::ranges::for_each( octx._programs, [&](auto oprog)
+     std::ranges::for_each( octx._programs, [&](auto& oprog)
      {
-       for(auto[k_name, k_obj] : oprog.kernels )
+       for(auto& [k_name, k_obj] : oprog.kernels )
        {
          if ( (k_name == method_name) && k_obj)
            if( _device_usage_table.at( octx._dev_ids.at(0) ) < dev_occupancy)
            {
-             ctx    = octx._ctx;
-             clk    = k_obj.value();
-             cq     = octx._queues[0];
+             ctx = octx._ctx;
+             clk = k_obj.value();
+             cq  = octx._queues[0];
              dev_id = octx._dev_ids.at(0);       
              dev_occupancy = _device_usage_table.at( dev_id );
              valid = true;
+             std::cout << "cnt = " << cnt++ << std::endl;
            }
-         
        }
      });
    });
@@ -409,14 +426,15 @@ ocl_runtime::_try_get_exec_parms( std::string method_name)
 }
 
 ulong ocl_runtime::_add_to_pending_jobs( uint num_input, 
-                                         std::vector<te_variable> kernel_args, 
-                                         std::vector<cl_mem> device_buffer,
-                                         cl_command_queue cq)
+                                         std::vector<te_variable>& kernel_args, 
+                                         std::vector<cl_mem>& device_buffer,
+                                         cl_command_queue& cq)
 {
   ulong wid = random_number();
 
-  auto pj = pending_job_t{ .num_inputs = num_input,.kernel_args = kernel_args,.device_buffers = device_buffer,.cq = cq  };
-  _pending_jobs[wid] = std::move(pj);
+  _pending_jobs.emplace(std::piecewise_construct,
+                        std::forward_as_tuple(wid),
+                        std::forward_as_tuple(num_input, kernel_args, device_buffer, cq) );
 
   return wid;
 }
@@ -426,23 +444,31 @@ status pending_job_t::transfer(uint src, uint dst)
 {
   cl_int err;
   if( kernel_args.size() != device_buffers.size())
-    std::cout << "Error mismatch pending job sizes" << std::endl;
+    std::cout << "Error mismatch pending job sizes " << kernel_args.size() << " : "
+              << device_buffers.size() << std::endl;
 
   if( dir == MEM_MOVE::TO_DEVICE ) 
   {
     //copy data to device buffer
-    std::cout << "Moving arg "<< dst << " to device " << std::endl;
     size_t sz = kernel_args[src].type_size * kernel_args[src].vec_size;
-    err = clEnqueueWriteBuffer(cq, device_buffers[dst], CL_TRUE, 0, sz, kernel_args[src].data, 0, NULL, NULL);
+    std::cout << "Moving arg "<< dst << " to device " << "(sz=" << sz << ")"<< std::endl;
+    auto& d_buff = device_buffers.at(dst);
 
-    if( err != CL_SUCCESS) throw std::runtime_error("Could not transfer buffer from host to device");
+    if(  kernel_args[src].data == nullptr ) std::cout << "nullptr buffer" << std::endl;
+
+    err = clEnqueueWriteBuffer(cq, d_buff, CL_TRUE, 0, sz, kernel_args[src].data, 0, NULL, NULL);
+   
+    if( err != CL_SUCCESS)
+    {
+      throw std::runtime_error("Could not transfer buffer from host to device : err = " + std::to_string(err) );
+    }
   }
   else
   {
     //copy data to device buffer
-    std::cout << "Moving device bufer "<< dst << " to host " << std::endl;
+    std::cout << "Moving device buffer "<< dst << " to host " << std::endl;
     size_t sz = kernel_args[dst].type_size * kernel_args[dst].vec_size;
-    err = clEnqueueReadBuffer(cq, device_buffers[src], CL_TRUE, 0, sz, kernel_args[dst].data, 1, &event, NULL);
+    err = clEnqueueReadBuffer(cq, device_buffers[dst], CL_TRUE, 0, sz, kernel_args[dst].data, 1, &event, NULL);
 
     if( err != CL_SUCCESS) throw std::runtime_error("Could not transfer buffer from host to device");
 
@@ -459,7 +485,7 @@ status pending_job_t::transfer_all()
 
   if( dir == MEM_MOVE::TO_DEVICE ) 
   {
-    for( auto i : std::views::iota(num_inputs) ) 
+    for( auto i : std::views::iota((uint)0, num_inputs) ) 
       transfer<dir>(i, i);
   }
   else
