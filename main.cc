@@ -26,8 +26,8 @@ int main(int argc, const char * argv[])
                     MATMULT{dir + "elwise_matmult_gen.aocx" }, 
                     MATDIV{dir + "elwise_matdiv_gen.aocx"   } );
     //submit
-    ocrt.submit(MATMULT{}, A, B, C).sizes(sz,sz,sz).defer(sz, sz, sz).
-         submit(MATDIV{},  E, F, G).sizes(sz,sz,sz).exec(sz, sz, sz);
+    ocrt.submit(MATMULT{}, A, B, C).sizes(sz,sz,sz).defer(sz, sz, sz)
+        .submit(MATDIV{},  C, F, G).sizes(sz,sz,sz).exec(sz, sz, sz);
 
     
     std::cout << "C = ";

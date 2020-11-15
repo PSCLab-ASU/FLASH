@@ -66,7 +66,9 @@ ocl_runtime::ocl_runtime()
         //create device buffers
         std::ranges::for_each(device_ss, [&](auto device_id)
         {
-          auto queue = clCreateCommandQueueWithProperties( ctx, device_id, NULL, &err);
+	  //changed recently because of OpenCL with cuda conflict
+          //auto queue = clCreateCommandQueueWithProperties( ctx, device_id, NULL, &err);
+          auto queue = clCreateCommandQueue( ctx, device_id, 0, &err);
           
           if( err == CL_SUCCESS ) 
           { 
