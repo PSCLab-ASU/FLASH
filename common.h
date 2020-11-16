@@ -12,6 +12,7 @@
 #include <random>
 
 #pragma once 
+#define EXPORT __attribute__((visibility("default")))
 
 enum struct MEM_MOVE { TO_DEVICE, TO_HOST };
 

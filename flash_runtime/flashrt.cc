@@ -6,7 +6,7 @@
 std::shared_ptr<flash_rt> flash_rt::_global_ptr;
 
 
-std::shared_ptr<flash_rt> flash_rt::get_runtime( std::string runtime_lookup )
+std::shared_ptr<flash_rt> EXPORT flash_rt::get_runtime( std::string runtime_lookup )
 {
 
   if( _global_ptr )
@@ -16,7 +16,7 @@ std::shared_ptr<flash_rt> flash_rt::get_runtime( std::string runtime_lookup )
 
 }
 
-flash_rt::flash_rt( std::string lookup)
+EXPORT flash_rt::flash_rt( std::string lookup)
 : _backend( FlashableRuntimeFactory::Create( lookup ) )
 {
   //get pointer to backend runtime
@@ -27,7 +27,7 @@ flash_rt::flash_rt( std::string lookup)
   
 }
 
-status flash_rt::execute(runtime_vars rt_vars,  uint num_of_inputs, 
+status EXPORT flash_rt::execute(runtime_vars rt_vars,  uint num_of_inputs, 
                          std::vector<te_variable> kernel_args, std::vector<size_t> exec_parms, options opt)
 {
   std::cout << "calling flash_rt::" << __func__ << std::endl;
@@ -47,7 +47,7 @@ status flash_rt::execute(runtime_vars rt_vars,  uint num_of_inputs,
   return {};
 }
 
-status flash_rt::register_kernels( size_t num_kernels, kernel_t kernel_types[], 
+status EXPORT flash_rt::register_kernels( size_t num_kernels, kernel_t kernel_types[], 
                                         std::string kernel_names[], std::optional<std::string> inputs[] ) 
 {
   std::cout << "calling flash_rt::" << __func__ << std::endl;
@@ -73,14 +73,14 @@ status flash_rt::register_kernels( size_t num_kernels, kernel_t kernel_types[],
  return {}; 
 }
 
-ulong flash_rt::create_transaction()
+ulong EXPORT flash_rt::create_transaction()
 {
   ulong tid = random_number();
 
   return tid;
 }
 
-status flash_rt::process_transaction( ulong tid )
+status EXPORT flash_rt::process_transaction( ulong tid )
 {
   std::cout << "calling flash_rt::" << __func__ <<"("<<tid <<")" << std::endl;
   ///////////////////////////////////////////////////////////
