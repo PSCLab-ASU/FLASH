@@ -3,3 +3,4 @@ host.bin
 *.rbf
 *.so
 *.bin
+*.o

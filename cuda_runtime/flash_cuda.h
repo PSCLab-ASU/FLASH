@@ -9,6 +9,7 @@
 #include <flash_runtime/flashable_factory.h>
 #include <boost/align/aligned_allocator.hpp>
 #include <regex>
+#include <ranges>
 
 #include "elf.c"
 
@@ -161,6 +162,13 @@ struct kernel_components
         functions.push_back( std::forward<decltype(in)>( in ) );  
         
     }, std::forward<decltype(entry)>( entry ) );
+  }
+
+  bool module_exists( std::string location )
+  {
+    return std::ranges::any_of(modules, 
+		               [&](std::string loc){ return loc == location; } , 
+			       &cuda_module::location);
   }
 
 };

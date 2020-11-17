@@ -44,6 +44,8 @@ std::shared_ptr<flash_cuda> flash_cuda::get_singleton()
 flash_cuda::flash_cuda()
 {
   std::cout << "Ctor'ing flash_cuda...." << std::endl;
+  //initialize driver API
+  cuInit(0);
   //grab a handle to each devices primary context
   _retain_cuda_contexts();
 
@@ -80,11 +82,13 @@ status flash_cuda::register_kernels( const std::vector<kernel_desc>& kds )
   for( auto kernel : kds )
   {
     
-    std::cout << "kernel_name = " << kernel._kernel_name << std::endl;
-    std::cout << "kernel_location = " << kernel._kernel_definition.value() << std::endl;
     if( kernel._kernel_type == kernel_t::INT_BIN ||
         kernel._kernel_type == kernel_t::EXT_BIN )
+    {
+      std::cout << "registering " << kernel._kernel_name
+	        <<" in "<< kernel._kernel_definition.value() << std::endl;
       _process_external_binary( kernel );
+    }
     else
       std::cout << "registration format not supported" << std::endl;
   }
@@ -161,24 +165,27 @@ int flash_cuda::_find_cubin_offset(void * nvFCubinBase, size_t fbin_len, std::st
   }
 
   //find function
-  std::string func_regex = "[^\\. ]+" + func_name + "[^\\.]";
+  std::string func_regex = "[^\\. ]+" + func_name + "[^\\.]+";
   std::regex fregex (func_regex);
+
   for(size_t i = 1; i < mod_ind.size()-1; i++)
   {
     std::string subst = cdata.substr(mod_ind[i], mod_ind[i+1] - mod_ind[i] );
-   
-    if( std::regex_search(subst, sof_match, fregex) ) 
+
+    int ret = cuModuleLoadFatBinary(&cuModule, &((unsigned char *) nvFCubinBase)[mod_ind[i]]  );    
+
+    if( ret == CUDA_SUCCESS ) 
     {
-      for (size_t j = 0; j < sof_match.size(); ++j) 
+      if( std::regex_search(subst, sof_match, fregex) ) 
       {
-        int ret = cuModuleLoadFatBinary(&cuModule, &((unsigned char *) nvFCubinBase)[mod_ind[i]]  );    
-     
-        if( ret == CUDA_SUCCESS ) 
+        for (size_t j = 0; j < sof_match.size(); ++j) 
         {
+          //std::cout << "Checking function : " << sof_match[j].str().data() << std::endl;  
           ret = cuModuleGetFunction(&khw, cuModule, sof_match[j].str().data() );
 
 	  if( ret == CUDA_SUCCESS )
 	  {
+            //std::cout << "Successfuly found cubin for ..." <<  sof_match[j] <<  std::endl;
             *mangled_name  = sof_match[j];
 	    *cubin_offset =  mod_ind[i];
             cuModuleUnload(cuModule);
@@ -187,10 +194,8 @@ int flash_cuda::_find_cubin_offset(void * nvFCubinBase, size_t fbin_len, std::st
 	  
           cuModuleUnload(cuModule);
         } //end of loading module
-
       } //end of function mapping    
     } //end of regex_search
-
   } //end of for loop index
   
   return -1;
@@ -207,6 +212,8 @@ void flash_cuda::_process_external_binary( const kernel_desc& kd)
 
 void flash_cuda::_add_cuda_function( std::string function_name )
 {
+  std::cout << "entering " << __func__ << std::endl;
+
   //add a function and the module offset
   for(cuda_module& mod : _kernel_comps.modules )
   {
@@ -226,7 +233,6 @@ void flash_cuda::_add_cuda_function( std::string function_name )
 			            function_name, &offset, &mangled_name);
       if(err == 0)
       {
-        
 	//create and add module to list
         bool added = mod.test_and_add( offset );
 
@@ -237,6 +243,7 @@ void flash_cuda::_add_cuda_function( std::string function_name )
           err = cuModuleGetFunction(&khw, *mod.get_module(offset), mangled_name.c_str());
 	  if( err == CUDA_SUCCESS)
 	  {
+            std::cout << "Found function entry point for : " << function_name << " : " << mangled_name <<std::endl;
 	    //add function
 	    _kernel_comps.push_back(
 	  		    cuda_function{
@@ -267,6 +274,12 @@ void flash_cuda::_add_cuda_modules( std::string location )
   struct stat sb;
   size_t file_size=0;
 
+  if( _kernel_comps.module_exists( location ) )
+  {
+    std::cout << "module already exists " << std::endl; 
+    return; 
+  }
+
   FILE *file = fopen( location.c_str(), "rb" );
   int fd     = fileno( file );
   
@@ -279,28 +292,33 @@ void flash_cuda::_add_cuda_modules( std::string location )
   //check for a valid file descriptor and file pointer
   if( (fd >= 0) && file != nullptr )
   {
-     
     if( fstat(fd, &sb ) != -1 )
     {
       file_size = sb.st_size;
       //mmap binaryt
       binary_mmap_ptr = mmap(NULL, file_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
 
-      bool isElf = elf_func( elf_is_elf64, file);
-
-      if( isElf )
+      if( binary_mmap_ptr != nullptr )
       {
-        bool contains_fatbinary = elf_func(elf64_get_section_header_by_name, 
-			                   file, (const Elf64_Ehdr *) &elf_header, nvFatBinHdr.c_str(), &header);
-	if( contains_fatbinary ) 
-	{
-          //Add the modules to the list
-          _kernel_comps.push_back
-	  ( 
-            cuda_module{ location, file, file_size, binary_mmap_ptr, 
-	                 fd, header.sh_addr, header.sh_size }
-	  );
-	}
+        bool isElf = elf_func( elf_is_elf64, file);
+
+        if( isElf )
+        {
+	  //get elf header
+          elf_func( elf64_get_elf_header, file, &elf_header);
+
+          bool contains_fatbinary = elf_func(elf64_get_section_header_by_name, 
+	    		                     file, (const Elf64_Ehdr *) &elf_header, nvFatBinHdr.c_str(), &header);
+	  if( contains_fatbinary ) 
+	  {
+            //Add the modules to the list
+            _kernel_comps.push_back
+	    ( 
+              cuda_module{ location, file, file_size, binary_mmap_ptr, 
+	                   fd, header.sh_offset, header.sh_size }
+	    );
+	  }
+        }
       }
     }
   }
@@ -317,6 +335,7 @@ void flash_cuda::_retain_cuda_contexts()
   //get the number od devices
   cuDeviceGetCount( &deviceCount );  
 
+  std::cout << "Found " << deviceCount << " devices" << std::endl;
   //get current context, and device
   for (int i : std::views::iota(0, deviceCount) )
   {
