@@ -101,7 +101,7 @@ status flash_cuda::wait( ulong  wid)
 			     //only move output buffers
 			     if( i++; i > pjob.nInputs )
 			     {
-			       std::cout << "transfering buffer " << i << std::endl;
+			       std::cout << "transfering buffer " << i << " from device to host" << std::endl;
                                return cuMemcpyDtoH ( h_args.get_data(), d_args, h_args.get_bytes() );
 			     }
 			     else return CUDA_SUCCESS;
@@ -138,18 +138,28 @@ status flash_cuda::execute(runtime_vars rt_vars, uint num_of_inputs,
     int i =0;
     std::cout << "Found executable kernel..." << std::endl;
     std::vector<CUdeviceptr> device_buffers( kernel_args.size() );
-    std::ranges::transform( kernel_args, std::back_inserter( device_buffers ), 
+    //std::ranges::transform( kernel_args, std::back_inserter( device_buffers ), 
+    std::ranges::transform( kernel_args, device_buffers.begin(), 
                             [&](auto host_buffer )
 			    {
 			      CUdeviceptr dev_ptr;
 			      size_t buffer_size = host_buffer.get_bytes();
-                              cuMemAlloc(&dev_ptr, buffer_size );
-			      //only transfer the inputs from H -> D
-			      if( i++; i <= num_of_inputs )
+			      std::cout << "Allocating device memory : " << buffer_size << std::endl;
+                              auto ret = cuMemAlloc(&dev_ptr, buffer_size );
+
+			      if( ret == CUDA_SUCCESS )
 			      {
-			        std::cout << "Transfering buffer from host to device" << std::endl;
-			        cuMemcpyHtoD( dev_ptr, host_buffer.get_data(), buffer_size );
+			        //only transfer the inputs from H -> D
+			        if( i++; i <= num_of_inputs )
+			        {
+			          std::cout << "Transfering buffer from host to device : " << i << std::endl;
+			          ret = cuMemcpyHtoD( dev_ptr, host_buffer.get_data(), buffer_size );
+				  if( ret != CUDA_SUCCESS)
+				    std::cout << "Failed to send data to device" << std::endl;
+			        }
 			      }
+			      else std::cout << "Failed to allocate device memory" << std::endl;
+
 			      return dev_ptr;
 			    });	
 

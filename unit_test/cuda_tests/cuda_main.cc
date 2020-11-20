@@ -25,7 +25,7 @@ int main(int argc, const char * argv[])
                     MATDIV{argv[0]} );
     //submit
     ocrt.submit(MATMULT{}, A, B, C).sizes(sz,sz,sz).defer((size_t)1, (size_t)1, (size_t)1)
-        .submit(MATDIV{},  C, F, G).sizes(sz,sz,sz).exec((size_t)2, (size_t)1, (size_t) 1);
+        .submit(MATDIV{},  C, F, G).sizes(sz,sz,sz).exec((size_t)1, (size_t)1, (size_t) 1, size_t(2) );
 
     
     std::cout << "C = ";
