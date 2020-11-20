@@ -23,7 +23,7 @@ struct NullType {};
 template<typename Upstream, typename NumInputs, typename Kernel, typename ... Ts>
 struct SubmitObj;
 
-template<typename _Upstream, typename RuntimeImpl, typename ... Ts> 
+template< typename RuntimeImpl, typename _Upstream, typename _ExecParams, typename ... Ts> 
 class RuntimeObj;
 
 constexpr bool strings_equal(char const * a, char const * b) {
@@ -65,12 +65,12 @@ struct SubmitObj
 
   private : 
 
-    template<typename RuntimeImpl, typename _Upstream, typename ... Us>
+    template<typename _RuntimeImpl, typename _Upstream, typename _ExecParams, typename ... Us>
     friend class RuntimeObj;
 
     //start forward execution path
-    template<typename ... Us>
-    void _forward_exec(ulong, ulong&, Us ... );
+    template<typename ExecParams, typename ... Us>
+    void _forward_exec(ulong, ulong&, ExecParams Params,  Us ... );
 
     template<typename T> friend class ExecObj;
 
@@ -85,16 +85,17 @@ struct SubmitObj
 };
 
 
-template<typename RuntimeImpl, typename _Upstream = NullType, typename ... Ts>
+template<typename _RuntimeImpl, typename _Upstream = NullType, typename _ExecParams = NullType, typename ... Ts>
 class RuntimeObj 
 {
   public :
     using Upstream_t    = _Upstream;
     using Registry_t    = std::tuple<Ts...>;
-    using RuntimeImpl_t = RuntimeImpl;
+    using RuntimeImpl_t = _RuntimeImpl;
+    using ExecParams_t  = _ExecParams;
 
     //constructor without upstream
-    explicit  RuntimeObj(RuntimeImpl impl, Ts&& ... ts)
+    explicit  RuntimeObj(RuntimeImpl_t impl, Ts&& ... ts)
     : _runtimeImpl(impl), _registry( ts...)
     {
       constexpr size_t N = sizeof...(ts);
@@ -146,7 +147,7 @@ class RuntimeObj
     }
  
     template<typename T>
-    RuntimeObj<_Upstream, RuntimeImpl,Ts...>& device_select(T devices) &&
+    RuntimeObj<RuntimeImpl_t, Upstream_t, ExecParams_t,  Ts...>& device_select(T devices) &&
     {
     //this is 
       //this is updating the temp object
@@ -154,10 +155,10 @@ class RuntimeObj
     }
 
     template<typename T>
-    RuntimeObj<_Upstream, RuntimeImpl,Ts...> device_select(T devices)
+    RuntimeObj<RuntimeImpl_t, Upstream_t, ExecParams_t, Ts...> device_select(T devices)
     {
       //copy ctor the current RuntimeObj
-      RuntimeObj<RuntimeImpl,Ts...> RTObj = *this;
+      auto RTObj = *this;
 
       return std::move( RTObj ).device_select( devices);
     }
@@ -169,8 +170,8 @@ class RuntimeObj
         friend struct SubmitObj;
 
         //constructor with upstream
-        RuntimeObj(RuntimeImpl impl, _Upstream& upst, Ts&& ... ts)
-        : _upstream(upst), _runtimeImpl(impl), _registry( ts...)
+        RuntimeObj(RuntimeImpl_t impl, Upstream_t& upst, ExecParams_t exec_params, Ts&& ... ts)
+        : _upstream(upst), _runtimeImpl(impl), _exec_params(exec_params), _registry( ts...)
         {
           std::cout << "Calling RuntimeObj with Upstream..." << std::endl;
          
@@ -178,13 +179,14 @@ class RuntimeObj
  
         }
 
-        RuntimeImpl get_runtime(){ return _runtimeImpl; }
+        RuntimeImpl_t get_runtime(){ return _runtimeImpl; }
 
         //This is incase a deferment occurs
         //std::optional<Upstream> _upstream;
-        std::optional<_Upstream> _upstream;
-        RuntimeImpl _runtimeImpl;
-        Registry_t _registry;
+        std::optional<Upstream_t>   _upstream;
+        RuntimeImpl_t               _runtimeImpl;
+        Registry_t                  _registry;
+	std::optional<ExecParams_t> _exec_params;
 
         typedef struct _snap_shot_data{
 
@@ -199,32 +201,52 @@ class RuntimeObj
             return [](){};
         }
 
-        template<typename NumInputs, typename B, typename I, typename Kernel>
+        template<typename NumInputs, typename B, typename I, typename Kernel, typename ExecParams>
         void execute(auto trans_sub_id, Kernel kernel, NumInputs, std::function<void()> context, 
-                     B buffers, std::array<size_t, std::tuple_size_v<B> > sizes, I items )
+                     B buffers, std::array<size_t, std::tuple_size_v<B> > sizes, ExecParams successor_params, I exec_items )
         {
             //std::cout << "Executing " << kernel_id << "..." << std::endl;
-            auto arr         = get_array_from_tuple( items );
             
             auto _rt_vars    = runtime_vars{ kernel.get_method(),
                                              kernel.get_method_ovr(),
                                              kernel.get_kernel_details() };
             auto _te_buffers = erase_tuple( buffers, sizes );
-	    auto exec_parms  = std::vector<size_t>( arr.begin(), arr.end() );
+
 	    //set transactio information
             _rt_vars.associate_transactions( trans_sub_id );
 
-            _runtimeImpl->execute( _rt_vars, NumInputs::value, _te_buffers, exec_parms, options{}); 
+	    if constexpr ( std::is_same_v<ExecParams, NullType>  )
+	    {
+              auto arr = get_array_from_tuple( exec_items );
+	      auto exec_parms  = std::vector<size_t>( arr.begin(), arr.end() );
+
+	      std::cout << "Exec : ";
+	      std::ranges::copy(exec_parms, std::ostream_iterator<size_t>{std::cout, ", "} );
+	      std::cout << std::endl;
+
+              _runtimeImpl->execute( _rt_vars, NumInputs::value, _te_buffers, exec_parms, options{}); 
+	    }
+	    else
+	    {
+              auto arr = get_array_from_tuple( successor_params );
+	      auto exec_parms  = std::vector<size_t>( arr.begin(), arr.end() );
+
+	      std::cout << "Defer : ";
+	      std::ranges::copy(exec_parms, std::ostream_iterator<size_t>{std::cout, ", "} );
+	      std::cout << std::endl;
+
+              _runtimeImpl->execute( _rt_vars, NumInputs::value, _te_buffers, exec_parms, options{}); 
+	    }
             //money maker: this function will interface with the runime Object
         }
 
         //does nothing in runtime obj
-        template<typename ... Us>
-        void _forward_exec( ulong tid, ulong& sa_id, Us ... items) {
+        template<typename ExecParams, typename ... Us>
+        void _forward_exec( ulong tid, ulong& sa_id, ExecParams, Us ... items) {
             if constexpr (std::is_same_v<NullType, _Upstream>) return;
             else
             {
-              if( _upstream ) _upstream->_forward_exec(tid, sa_id, items...);
+              if( _upstream ) _upstream->_forward_exec(tid, sa_id, _exec_params.value(), items...);
               else std::cout << "Could not find upstream" << std::endl;    
             }
             
@@ -262,7 +284,7 @@ SubmitObj<Upstream, NumInputs, Kernel, Ts...>::exec(Us... items)
   //create a unique_id and makes sure thier is no conflicting Id
   ulong transaction_id = flash_rt::get_runtime()->create_transaction();
   //execute kernels from root node, forward
-  _forward_exec(transaction_id, subaction_id, items...);
+  _forward_exec(transaction_id, subaction_id, NullType{}, items...);
 
   flash_rt::get_runtime()->process_transaction( transaction_id );
 
@@ -278,7 +300,9 @@ auto SubmitObj<Upstream, NumInputs, Kernel, Ts...>::defer(Us... items)
   {
       auto func2 = [&]<std::size_t... I >(std::index_sequence<I...> ) 
       {
-        return RuntimeObj(_upstream->get_runtime(), *this, _upstream->template get_kernel_definition<I>() ... );
+	auto exec_parms = std::make_tuple(items...);
+
+        return RuntimeObj(_upstream->get_runtime(), *this, exec_parms, _upstream->template get_kernel_definition<I>() ... );
       };
     
     return func2(Indices{}); 
@@ -301,15 +325,16 @@ SubmitObj<Upstream, NumInputs, Kernel, Ts...>& SubmitObj<Upstream, NumInputs, Ke
 }
 
 template<typename Upstream, typename NumInputs, typename Kernel, typename ... Ts>
-template< typename ... Us>
-void SubmitObj<Upstream, NumInputs, Kernel, Ts...>::_forward_exec(ulong trans_id, ulong& subaction_id, Us ... items )
+template< typename ExecParams, typename ... Us>
+void SubmitObj<Upstream, NumInputs, Kernel, Ts...>::_forward_exec(ulong trans_id, ulong& subaction_id, ExecParams params, Us ... items )
 {  
   //will call prior forward excute until it gets to the root runtime object
-  _upstream->_forward_exec(trans_id, subaction_id, items...);
+  std::optional<NullType> OptNull;
+  _upstream->_forward_exec(trans_id, subaction_id, OptNull, items...);
   //Executing 
   auto trans_sub_id = std::make_pair(trans_id, subaction_id );
   _upstream->execute(trans_sub_id, _override_kernel, std::integral_constant<uint, NumInputs::value>{},
-                     _snapshot, _buffers, _sizes, std::make_tuple(items...) );
+                     _snapshot, _buffers, _sizes, params, std::make_tuple(items...) );
 
   std::cout << "subaction id = " << subaction_id << std::endl;
   subaction_id++;

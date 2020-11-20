@@ -107,6 +107,7 @@ struct cuda_module
 
 struct cuda_function
 {
+  std::string id;
   std::string func_name;
   std::string mangled_func_name;
   CUfunction func;
@@ -115,6 +116,8 @@ struct cuda_function
 
 struct cuda_kernel
 { 
+  //function ID
+  std::string cuda_function_id;
   //functiona informaiton
   std::string cuda_function_key;
 
@@ -127,17 +130,6 @@ struct cuda_kernel
 
 };
 
-struct kernel_library
-{
-  //kernels
-  std::vector<cuda_kernel> kernels;
-
-  void push_back( cuda_kernel cuKern) 
-  {
-    kernels.push_back( cuKern );
-  }
-
-};
 
 struct kernel_components
 {
@@ -171,21 +163,110 @@ struct kernel_components
 			       &cuda_module::location);
   }
 
+  std::string get_current_ctx_key( )
+  {
+    CUcontext cuCtx;
+    CUdevice cuDevice;
+    //get context
+    cuCtxGetCurrent( &cuCtx );
+    cuCtxGetDevice( &cuDevice);
+    
+    //find context key
+    auto ctx_key = std::ranges::find_if( contexts, [&](auto entry)
+    {
+      return ( (entry.cuContext == cuCtx) && (entry.cuDevice == cuDevice) );
+
+    } );
+    
+    return ctx_key->id;
+
+  }
+
+  std::optional<CUfunction> get_function( std::string fid )
+  {
+    auto entry = std::ranges::find( functions, fid, &cuda_function::id);
+    if( entry != functions.end() )
+    { 
+      std::cout << "Successfully found " << fid << std::endl;
+      return entry->func;
+    }
+    else return {};
+  }
+
+  void set_active_context( std::string ctx_key )
+  {
+    auto ctx = std::ranges::find( contexts, ctx_key, &cuda_context::id );
+    if( ctx != contexts.end() )
+    {
+      ctx->set_context_to_current(); 
+    }
+    else std::cout << "Could not find ctx to set active" << std::endl;
+  }
+
 };
 
+struct kernel_library
+{
+
+  void push_back( cuda_kernel cuKern) 
+  {
+    kernels.push_back( cuKern );
+  }
+
+  std::optional<CUfunction>  
+  get_cufunction_for_current_ctx( std::string function_name, std::optional<std::string> location = {} )
+  {
+    auto ctx_key = _kernel_comps.get_current_ctx_key();
+    
+    auto kernel = std::ranges::find_if( kernels, [&] (auto entry)
+    {
+      if( location )
+        return (entry.cuda_context_key  == ctx_key) &&
+               (entry.cuda_module_key   == location.value() ) && 
+	       (entry.cuda_function_key == function_name);
+      else
+        return (entry.cuda_context_key  == ctx_key) &&
+	       (entry.cuda_function_key == function_name);
+
+
+    } );
+
+    auto kfunc = _kernel_comps.get_function( kernel->cuda_function_id );
+
+    return kfunc;
+
+  }
+
+  kernel_components& _kernel_comps;
+
+  //kernels
+  std::vector<cuda_kernel> kernels;
+
+};
 
 struct pending_job_t
 {
-  uint num_inputs;
+  uint nInputs;
+  std::string cuCtx_key;
   std::vector<te_variable> kernel_args;
-  
-  //if the dir = TO_HOST
-  //src index must be  within num
-  template<MEM_MOVE dir = MEM_MOVE::TO_HOST >
-  status transfer( uint, uint );
+  std::vector<CUdeviceptr> device_buffers; 
 
-  template<MEM_MOVE dir = MEM_MOVE::TO_HOST >
-  status transfer_all(); 
+  pending_job_t( std::string ctx_key, std::vector<te_variable> host_buffs, 
+		 std::vector<CUdeviceptr> dev_buffs, uint num_inputs)
+  {
+    cuCtx_key      = ctx_key;
+    kernel_args    = host_buffs;
+    device_buffers = dev_buffs;
+    nInputs        = num_inputs;
+  }
+
+  ~pending_job_t()
+  {
+    std::ranges::for_each(device_buffers, [](auto& dev_buffer )
+    {
+      cuMemFree( dev_buffer );
+    } );
+  }
 
 };
 
@@ -218,6 +299,8 @@ class flash_cuda : public IFlashableRuntime
 
     void _reset_cuda_ctx();
 
+    void _set_least_active_gpu_ctx();
+
     void _add_cuda_modules(std::string);
 
     void _add_cuda_function( std::string );
@@ -231,6 +314,8 @@ class flash_cuda : public IFlashableRuntime
     kernel_library _kernel_lib;
 
     std::map<ulong, pending_job_t> _pending_jobs;
+
+    std::map<std::string, ulong> _job_count_per_ctx;
 
     static  std::shared_ptr<flash_cuda> _global_ptr; 
 

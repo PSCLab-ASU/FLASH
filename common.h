@@ -79,6 +79,8 @@ struct te_variable
   uint type_size;
   size_t vec_size; 
 
+  void * get_data()  { return data; }
+  size_t get_bytes() { return type_size*vec_size; }
 };
 
 

@@ -42,6 +42,7 @@ std::shared_ptr<flash_cuda> flash_cuda::get_singleton()
 }
 
 flash_cuda::flash_cuda()
+: _kernel_lib{ _kernel_comps }
 {
   std::cout << "Ctor'ing flash_cuda...." << std::endl;
   //initialize driver API
@@ -50,29 +51,6 @@ flash_cuda::flash_cuda()
   _retain_cuda_contexts();
 
 
-}
-
-status flash_cuda::wait( ulong  wid)
-{
-  //get job from pending jobs  
-  
- 
-  return status{};
-}
-
-status flash_cuda::execute(runtime_vars rt_vars, uint num_of_inputs, 
-                              std::vector<te_variable> kernel_args, std::vector<size_t> exec_parms)
-{
-  std::cout << "Executing from cuda-flash_runtime..." << __func__ << std::endl;
-  std::cout << "Executing : " << rt_vars.get_lookup() <<" ..."<< std::endl;
-
-
-
-
-
-
-
-  return status{-1};
 }
 
 status flash_cuda::register_kernels( const std::vector<kernel_desc>& kds ) 
@@ -99,43 +77,127 @@ status flash_cuda::register_kernels( const std::vector<kernel_desc>& kds )
   return {}; 
 }
 
-
-template<MEM_MOVE dir>
-status pending_job_t::transfer(uint src, uint dst)
+status flash_cuda::wait( ulong  wid)
 {
+  std::cout << "Enttering " << __func__ << std::endl;
+  //get job from pending jobs  
+  auto entry = _pending_jobs.find( wid);
 
-  if( dir == MEM_MOVE::TO_DEVICE ) 
+  if( entry != _pending_jobs.end() ) 
   {
-    //copy data to device buffer
+    //set context to the job related to wid;
+    auto pjob = entry->second;
+    _kernel_comps.set_active_context( pjob.cuCtx_key );
+    //blocks until job is complete
+    std::cout << "Sync'ing ctx..." << std::endl;
+    int ret = cuCtxSynchronize();
+    std::cout << "waiting complete" << std::endl;
+    //move data from device buffer to host buffera
+    std::vector<int> rets;
+    int i=0;
+    std::ranges::transform(pjob.kernel_args, pjob.device_buffers, std::back_inserter( rets ),
+		           [&](auto h_args, auto d_args)
+		           {
+			     //only move output buffers
+			     if( i++; i > pjob.nInputs )
+			     {
+			       std::cout << "transfering buffer " << i << std::endl;
+                               return cuMemcpyDtoH ( h_args.get_data(), d_args, h_args.get_bytes() );
+			     }
+			     else return CUDA_SUCCESS;
+  
+		           } );
+
+    bool success = std::ranges::all_of( rets, unary_equals{(int)CUDA_SUCCESS} );
+
+    if( !success ) std::cout << "Could not move all device buffers to host" << std::endl;
+
+    //remove job
+    _pending_jobs.erase( wid);
+  }
+  else std::cout << "Could not find pending job..." << std::endl;
+ 
+  return status{};
+}
+
+status flash_cuda::execute(runtime_vars rt_vars, uint num_of_inputs, 
+                              std::vector<te_variable> kernel_args, std::vector<size_t> exec_parms)
+{
+  std::cout << "Executing from cuda-flash_runtime..." << __func__ << std::endl;
+  std::cout << "Executing : " << rt_vars.get_lookup() <<" ..."<< std::endl;
+
+  //set current context to context with the least amount of work
+  _set_least_active_gpu_ctx();
+  std::string kernel_name = rt_vars.kernel_name_override?rt_vars.kernel_name_override.value():rt_vars.get_lookup();
+  auto func_binary = _kernel_lib.get_cufunction_for_current_ctx( kernel_name, rt_vars.kernel_impl_override );
+  auto ctx_key     = _kernel_comps.get_current_ctx_key();
+  //auto input_kargs = std::vector<te_variable>( kernel_args.begin(), kernel_args.begin() + num_of_inputs); 
+
+  if( func_binary )
+  {
+    int i =0;
+    std::cout << "Found executable kernel..." << std::endl;
+    std::vector<CUdeviceptr> device_buffers( kernel_args.size() );
+    std::ranges::transform( kernel_args, std::back_inserter( device_buffers ), 
+                            [&](auto host_buffer )
+			    {
+			      CUdeviceptr dev_ptr;
+			      size_t buffer_size = host_buffer.get_bytes();
+                              cuMemAlloc(&dev_ptr, buffer_size );
+			      //only transfer the inputs from H -> D
+			      if( i++; i <= num_of_inputs )
+			      {
+			        std::cout << "Transfering buffer from host to device" << std::endl;
+			        cuMemcpyHtoD( dev_ptr, host_buffer.get_data(), buffer_size );
+			      }
+			      return dev_ptr;
+			    });	
+
+    //create pending job entry
+    //WARNING MAKE SURE this void * is valid during the invocation of the kernel
+    //void * is a CUDA back to erase the type of the device pointer.
+    std::vector<void *> void_devs_buffs;
+    std::ranges::transform(device_buffers, std::back_inserter( void_devs_buffs ),
+    		           [](auto& device_buffer) { return (void *) &device_buffer; } );
+
+    //launch kernel
+    std::vector<size_t> dims(8, 1);
+    dims[7] = dims[6] = 0;
+    std::ranges::copy(exec_parms, dims.begin() );
+
+    std::ranges::copy( dims, std::ostream_iterator<size_t>{std::cout, ", "} );
+    std::cout << std::endl;
+    int ret = cuLaunchKernel(func_binary.value(), dims[0], dims[1], dims[2], dims[3], 
+                             dims[4], dims[5], dims[6], nullptr, void_devs_buffs.data(), 0);
+    //int ret = cuLaunchKernel(func_binary.value(), 1, 1, 1, 1, 1, 1, 0, 0, void_devs_buffs.data(), 0);
+
+    if( ret == CUDA_SUCCESS)
+    {
+      std::cout << "Kernel successfully launched..." << std::endl;
+      ulong wid = random_number(); 
+      //pending jobs
+
+      _pending_jobs.emplace(std::piecewise_construct,
+		            std::forward_as_tuple(wid),
+			    std::forward_as_tuple(ctx_key, kernel_args, device_buffers, num_of_inputs ) );
+
+      _job_count_per_ctx.at(ctx_key) += 1;
+
+      auto stat = status{0, wid };
+
+      return stat;
+    }
+    else std::cout << "Could not launch " << rt_vars.get_lookup() << " : " << ret << std::endl;
+    
   }
   else
   {
-    //copy data to device buffer
-
+    std::cout << "Could not find function to execute" << std::endl;
   }
 
-  return status{};
-
+  return status{-1};
 }
 
-//does not support READ_WRITE parameters yet
-template<MEM_MOVE dir>
-status pending_job_t::transfer_all()
-{
-
-  if( dir == MEM_MOVE::TO_DEVICE ) 
-  {
-    for( auto i : std::views::iota((uint)0, num_inputs) ) 
-      transfer<dir>(i, i);
-  }
-  else
-  {
-    for( auto i : std::views::iota(num_inputs, kernel_args.size() ) ) 
-      transfer( i, i );
-
-  }
-  return status{};
-}
 
 void flash_cuda::_reset_cuda_ctx()
 {
@@ -244,15 +306,17 @@ void flash_cuda::_add_cuda_function( std::string function_name )
 	  if( err == CUDA_SUCCESS)
 	  {
             std::cout << "Found function entry point for : " << function_name << " : " << mangled_name <<std::endl;
+	    std::string func_id = std::to_string( random_number() );
 	    //add function
 	    _kernel_comps.push_back(
 	  		    cuda_function{
+			      func_id,
 			      function_name, mangled_name, khw
 			    }
 			  );
 	    //create kernel_library entry
 	    _kernel_lib.push_back( 
-			     cuda_kernel{ function_name, mod.get_id(), ctx.get_id(), offset }
+			     cuda_kernel{ func_id, function_name, mod.get_id(), ctx.get_id(), offset }
 			    );
             
 	  } //added function to functions
@@ -350,13 +414,28 @@ void flash_cuda::_retain_cuda_contexts()
       if( result == CUDA_SUCCESS)
       {
 	//push to compoements.context
+        auto ctx_key = std::to_string( random_number() );
         _kernel_comps.push_back
 	( 
-          cuda_context{ std::to_string( random_number() ), 
+          cuda_context{ ctx_key, 
 			device, 
 			ctx } 
 	);
+
+        //iontializing jobs table
+	_job_count_per_ctx.insert({ctx_key, 0});
+
       }
     }
   }
 }
+
+void flash_cuda::_set_least_active_gpu_ctx()
+{
+  auto lowest = std::ranges::min_element(_job_count_per_ctx, 
+  		                          {}, &std::map<std::string,ulong>::value_type::second);
+  if( lowest != _job_count_per_ctx.end() )
+    _kernel_comps.set_active_context( lowest->first );
+  else std::cout << "Could not find gpu_ctx entry" << std::endl;
+}
+

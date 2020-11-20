@@ -24,8 +24,8 @@ int main(int argc, const char * argv[])
     RuntimeObj ocrt(flash_rt::get_runtime("NVIDIA_GPU") , MATMULT{ argv[0] }, 
                     MATDIV{argv[0]} );
     //submit
-    ocrt.submit(MATMULT{}, A, B, C).sizes(sz,sz,sz).defer(sz, sz, sz)
-        .submit(MATDIV{},  C, F, G).sizes(sz,sz,sz).exec(sz, sz, sz);
+    ocrt.submit(MATMULT{}, A, B, C).sizes(sz,sz,sz).defer((size_t)1, (size_t)1, (size_t)1)
+        .submit(MATDIV{},  C, F, G).sizes(sz,sz,sz).exec((size_t)2, (size_t)1, (size_t) 1);
 
     
     std::cout << "C = ";
