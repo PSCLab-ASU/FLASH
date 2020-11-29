@@ -23,6 +23,8 @@ using override_kernel_t = std::pair<
                                 std::optional<std::string>,
                                 std::optional<std::string> > > >;
 
+template<size_t I>
+using expand_void = void *;
 
 struct runtime_vars
 {
@@ -52,6 +54,10 @@ struct kernel_desc
   kernel_t    _kernel_type;
   std::string _kernel_name;
   std::optional<std::string> _kernel_definition;
+
+  std::string get_kernel_name() { return _kernel_name; }
+  std::optional<std::string> get_kernel_def(){ return _kernel_definition; }
+
 };
 
 template<typename T>
@@ -146,3 +152,17 @@ inline ulong random_number()
   return num;
 }
 
+template<size_t N, typename Indices = std::make_index_sequence<N> >
+void execute_ninput_method( auto& func_ptr, auto& inputs )
+{
+
+  auto expand_exec = [&]<size_t... I >(std::index_sequence<I...> )
+  {
+    auto exec = (void(*)(expand_void<I>...)) func_ptr;
+    exec( (inputs[I].data)... );
+                       
+  }; 
+
+  expand_exec( Indices{} );
+
+}

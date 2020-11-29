@@ -5,6 +5,9 @@
 
 std::shared_ptr<flash_rt> flash_rt::_global_ptr;
 
+//use for kernels function
+extern size_t EXPORT get_indices( int ind);
+
 
 std::shared_ptr<flash_rt> EXPORT flash_rt::get_runtime( std::string runtime_lookup )
 {
