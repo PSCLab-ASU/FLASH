@@ -6,10 +6,13 @@
 #include <thread>
 #include <utility>
 #include <mutex>
+#include <regex>
 #include <condition_variable>
 #include <flash_runtime/flash_interface.h>
 #include <flash_runtime/flashable_factory.h>
 #include <boost/align/aligned_allocator.hpp>
+
+#include "elf.c"
 
 #pragma once
 
@@ -32,12 +35,6 @@ struct subaction_context
 
   void add_kernel_impl( void * func_ptr);
    
-  //void sync();
-
-  //void notify_threads_of_completion();
-
-  //void wait_for_completion();
-
   bool finished();
 
   //maybe torn reads and writes?
@@ -56,14 +53,6 @@ struct subaction_context
   size_t _next_index;
   bool _finished =false;
   unsigned int _padding;
-
-
-  //multhreading section
-  //std::atomic_int  _pending_thrds;
-  //std::condition_variable _compl;
-  //std::mutex _mu;
-
-
 
 };
 
@@ -117,15 +106,12 @@ struct cpu_kernel
 struct cpu_exec
 {
   std::string _impl;
-  void * _bin_ptr;
+  void * _bin_ptr;  //this is the mmap of the file
+  Elf64_Shdr _header;
+
   std::vector<cpu_kernel> _kernels;
 
-  cpu_exec( std::string impl, void * bin_ptr)
-  {
-    _impl = impl;
-    _bin_ptr = bin_ptr;
-  }
-  
+  cpu_exec( std::string impl, void * bin_ptr);
 
   std::string get_impl();
 
@@ -137,6 +123,11 @@ struct cpu_exec
 
   void insert_kernel( std::string, std::optional<std::string>, void * );
 
+  std::optional<std::string> get_mangled_name( std::string );
+
+  Elf64_Shdr _get_symtable_hdr();
+
+  bool _test( std::string );
 };
 
 struct exec_repo
@@ -212,7 +203,7 @@ class cpu_runtime : public IFlashableRuntime
       _thread_start.wait( lk, pred );
       lk.unlock();
     }
-
+ 
     void _stagger_start();
 
     void _add_subaction( subaction_context&& ctx )

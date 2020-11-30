@@ -215,21 +215,23 @@ void exec_repo::check_and_register( kernel_desc& kd )
 
     if( exec->check_kernel( kd.get_kernel_name() ) ) 
     {
-      void * func_ptr = dlsym( exec->get_bin_ptr(), kd.get_kernel_name().c_str() );
-
-      if( func_ptr != NULL ) 
-      {
-        std::cout << "adding " << kd.get_kernel_name()  
-                  << "(" << kd.get_kernel_name() << ") to cpu repo" << std::endl;
-
-        exec->insert_kernel( kd.get_kernel_name(), {}, func_ptr);
-      }
-      else
-      {
-        std::cout <<"Could not find kernel function " <<  kd.get_kernel_name() 
-		  << " in " << impl <<  std::endl;
-      }
       
+      auto mname = exec->get_mangled_name( kd.get_kernel_name() ); 
+      if( mname )
+      {
+        void * func_ptr = dlsym( exec->get_bin_ptr(), mname->c_str() );
+
+        if( func_ptr != NULL ) 
+        {
+          std::cout << "adding " << kd.get_kernel_name()  
+                    << "(" << kd.get_kernel_name() << ") to cpu repo" << std::endl;
+
+          exec->insert_kernel( kd.get_kernel_name(), mname, func_ptr);
+
+        }
+
+      } else std::cout <<"Could not find kernel function " <<  kd.get_kernel_name() 
+	  	       <<" in " << impl <<  std::endl;
     }  //end of kernel creation
   } //binary esists
 }
@@ -260,6 +262,14 @@ void * exec_repo::find_kernel_fptr( std::string kernel_name , std::optional<std:
   
   return nullptr;	   
 } 
+
+cpu_exec::cpu_exec( std::string impl, void * bin_ptr)
+{
+  _impl = impl; 
+  _bin_ptr = bin_ptr;  
+  _header = _get_symtable_hdr();
+}
+
 
 std::string cpu_exec::get_impl()
 {
@@ -306,6 +316,91 @@ void cpu_exec::insert_kernel( std::string kname, std::optional<std::string> mker
     _kernels.emplace_back( kernel_name, mkern, func_ptr);
   }
   else std::cout << "Kernel already exists" << std::endl;
+}
+
+Elf64_Shdr cpu_exec::_get_symtable_hdr()
+{
+  FILE *file = fopen( get_impl().c_str(), "rb" );
+  Elf64_Ehdr elf_header;
+  Elf64_Shdr header;
+
+  auto elf_func = [&](auto func, auto ... parms)->bool 
+  {
+    bool b = func( parms ...);
+    fseek(file, 0, SEEK_SET);
+    return b;
+  };
+
+  if( file != nullptr )
+  {
+    bool isElf = elf_func( elf_is_elf64, file);
+    if( isElf )
+    {
+      bool symtab_exists = elf_func(elf64_get_symtab_section, 
+                                    file,
+                                    (const Elf64_Ehdr *) &elf_header, 
+                                    &header);       
+   
+      if( symtab_exists )
+      {
+        std::cout << "Found symtab..." << std::endl;
+
+      } else std::cout << "Could not find symbol table " << std::endl;
+
+    } else std::cout << "Is not valid ELF file " << std::endl;
+
+  } else std::cout << "File doesn't exists" << std::endl;
+  //closing file
+  fclose(file);
+
+  return header;
+}
+
+std::optional<std::string> cpu_exec::get_mangled_name( std::string kernel_name )
+{
+  auto cdata = std::string( &((char *) _bin_ptr)[_header.sh_offset], _header.sh_size); 
+
+  std::smatch sof_match;
+  std::string func_regex;
+  std::string delimiter = "([^\\. ]+)?";
+
+  //foudn exact name match
+  if( _test( kernel_name ) ) return kernel_name;
+
+  //parse namepsaces and construct function regex
+  std::regex_search(kernel_name, sof_match, std::regex("[^::]+") );
+  func_regex = std::accumulate( std::begin(sof_match), std::end(sof_match), 
+                                delimiter, [&](auto prev, auto cur)
+                                {
+                                  return (prev + cur.str() + delimiter );
+                                } );
+
+  std::cout << "Printing " << func_regex << std::endl;
+
+  if( std::regex_search(cdata, sof_match, std::regex(func_regex) ) )
+  {
+
+    for( auto match : sof_match )
+    {
+      std::cout << "Checking function : " << match << std::endl;
+      if( _test(match) )
+      {
+        std::cout << "Successfuly found entrypoint for ..." << match <<  std::endl;
+        return match;
+      } //end of loading function
+      else std::cout << "No match found" << std::endl;
+    }
+  }
+
+  return {};
+}
+
+bool cpu_exec::_test( std::string func_name )
+{
+  void * func_ptr = dlsym( get_bin_ptr(), func_name.c_str() );
+
+  return (func_ptr != NULL);
+
 }
 
 subaction_context::subaction_context( ulong wid, std::vector<std::thread::id>& threads, std::vector<te_variable> k_args, std::vector<size_t> max_cnts )
@@ -373,32 +468,7 @@ void subaction_context::add_kernel_impl( void * func_ptr)
 {
   _func_ptr = func_ptr;
 }
-/*
-void subaction_context::sync()
-{
-  if( _pending_thrds.load() == 0 )
-  {
-    _compl.notify_all();
-    _compl.wait(lk );
 
-    std::unique_lock lk( _mu );
-
-  }
-  else _pending_thrds--;
-}
-
-void subaction_context::notify_threads_of_completion()
-{
-  _compl.notify_all();
-}
-
-void subaction_context::wait_for_completion()
-{
-  std::unique_lock lk( _mu );
-  _compl.wait(lk, [](){ return (_pending_thrds.load() != 0) );
-}
-
-*/
 bool subaction_context::finished()
 {
   return _finished;
