@@ -9,6 +9,10 @@
 #include <chrono>
 #include <dlfcn.h>
 #include <utility>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+
 
 /* Registers the factory with flash factory*/
 bool cpu_runtime::_registered = FlashableRuntimeFactory::Register(
@@ -17,6 +21,7 @@ bool cpu_runtime::_registered = FlashableRuntimeFactory::Register(
 
 std::shared_ptr<cpu_runtime> cpu_runtime::_global_ptr;
 
+std::vector<subaction_context > cpu_runtime::g_subaction_table;
 
 size_t get_indices( int ind)
 {
@@ -26,7 +31,6 @@ size_t get_indices( int ind)
   auto& subact_ctx = cpu_runtime::get_current_job();
 
   return subact_ctx.get_dim_index(tid, ind );
-
 }
 
 
@@ -41,8 +45,6 @@ FlashableRuntimeMeta<IFlashableRuntime> cpu_runtime::get_runtime()
 
 std::shared_ptr<cpu_runtime> cpu_runtime::get_singleton()
 {
-  std::cout << "entering " << __func__ << std::endl;
-
   if( _global_ptr ) return _global_ptr;
   else return _global_ptr = std::shared_ptr<cpu_runtime>( new cpu_runtime() );
 
@@ -50,10 +52,9 @@ std::shared_ptr<cpu_runtime> cpu_runtime::get_singleton()
 
 cpu_runtime::cpu_runtime()
 {
-  std::cout << "entering " << __func__ << std::endl;
   //get number of cores;
-  _core_cnt = std::thread::hardware_concurrency();
-
+  _core_cnt = std::thread::hardware_concurrency() / 2 ;
+  clear_subactions();
 
   //auto test = std::jthread(&cpu_runtime::_thread_main, this, stoken);
   auto thread_obj = std::bind( &cpu_runtime::_thread_main, 
@@ -64,6 +65,8 @@ cpu_runtime::cpu_runtime()
     _thread_group.emplace_back( thread_obj );  
   } 
 
+  std::ranges::transform(_thread_group, std::back_inserter(_thread_group_ids),
+		         std::identity{}, &std::jthread::get_id );
   //ADD ANY LOGIC HERE
 
   //start the thread group
@@ -73,8 +76,6 @@ cpu_runtime::cpu_runtime()
 
 void cpu_runtime::_thread_main( std::stop_token stop )
 {
-  std::cout << "entering " << __func__ << std::endl;
-
   //get current thread id;
   std::thread::id tid = std::this_thread::get_id();
 
@@ -85,7 +86,8 @@ void cpu_runtime::_thread_main( std::stop_token stop )
   while( !stop.stop_requested() )
   {
     //check if thier any jobs in the subaction table
-    _lock_wait( [](){ return cpu_runtime::subaction_exists(); } );
+    _lock_wait( [&](){ return cpu_runtime::subaction_exists() || stop.stop_requested(); } );
+    if( !stop.stop_requested() )
     {
       _stagger_start();
       //i_empty should be padded by the number of parallel processing units
@@ -98,12 +100,17 @@ void cpu_runtime::_thread_main( std::stop_token stop )
         //there are subaction in queue
         //and thier are still work items in the subactions
       }
-
+      
       _threads_inprog--;
-      if( _threads_inprog.load() == 0) _thread_start.notify_all();
+      if( _threads_inprog.load() == 0) 
+      {
+        std::cout << std::endl << "Notifying wait ... " << std::endl;
+        _thread_start.notify_all();
+      }
 
       _lock_wait( [&](){ return _threads_inprog.load() != 0; } );
-    }
+
+    } else std::cout << "Shuitting down thread pool" << std::endl;
 
   }
 
@@ -113,9 +120,8 @@ status cpu_runtime::wait( ulong  wid)
 {
  
   auto& subact = get_subaction_ctx( wid );
-
   //wait for job to complete
-  _lock_wait( [](){ return true; } );
+  _lock_wait( [&](){ return subact.finished(); } );
 
   //remove entry from list
   remove_subaction( wid );
@@ -126,7 +132,16 @@ status cpu_runtime::wait( ulong  wid)
   //notify thread pool of completion of removal 
   _thread_start.notify_all();
 
-  if( subaction_exists() )  _thread_start.notify_all();
+  if( subaction_exists() )  
+  {
+    _thread_start.notify_all();
+  }
+  else 
+  {
+    std::cout << "Completed all jobs in the pipe" << std::endl;
+    std::ranges::for_each(_thread_group, std::identity{}, &std::jthread::request_stop );
+    _thread_start.notify_all();
+  }
   
   std::cout << "Completed wid : " << wid << std::endl;
 
@@ -136,15 +151,11 @@ status cpu_runtime::wait( ulong  wid)
 status cpu_runtime::execute(runtime_vars rt_vars, uint num_of_inputs, 
                             std::vector<te_variable> kernel_args, std::vector<size_t> exec_parms)
 {
-  std::cout << "entering " << __func__ << std::endl;
-
   std::string kernel_name = rt_vars.kernel_name_override.value_or(rt_vars.lookup);
   ulong wid = random_number();
 
   auto func_ptr = _find_function_ptr( kernel_name, rt_vars.kernel_impl_override );
 
-  std::ranges::transform(_thread_group, std::back_inserter(_thread_group_ids),
-		         std::identity{}, &std::jthread::get_id );
 
   auto subact_ctx = subaction_context(  wid, _thread_group_ids, kernel_args, exec_parms );
 
@@ -165,8 +176,6 @@ status cpu_runtime::execute(runtime_vars rt_vars, uint num_of_inputs,
 
 status cpu_runtime::register_kernels( const std::vector<kernel_desc>& kds ) 
 {
-  
-  std::cout << "entering " << __func__ << std::endl;
   
   for(auto kd : kds ) _kernel_repo.check_and_register( kd );
 
@@ -190,6 +199,7 @@ void cpu_runtime::_stagger_start()
 void exec_repo::check_and_register( kernel_desc& kd )
 {
   auto kdef = kd.get_kernel_def();
+  void * main_h;
 
   if( kdef )
   {
@@ -198,10 +208,13 @@ void exec_repo::check_and_register( kernel_desc& kd )
 
     if( exec == _programs.end() )
     {
-      void * main_h = dlopen( kdef.value().c_str(), RTLD_LAZY );
+      if( kd.get_kernel_type() == kernel_t::INT_BIN )
+        main_h = dlopen( NULL, RTLD_LAZY );
+      else
+        main_h = dlopen( kdef.value().c_str(), RTLD_LAZY );
+        
       if( main_h )
       {
-	std::cout << "Added " << impl << " to cpu repo" << std::endl;
         _programs.emplace_back(impl, main_h);
       } 
       else 
@@ -213,9 +226,8 @@ void exec_repo::check_and_register( kernel_desc& kd )
       exec = std::ranges::find( _programs, impl, &cpu_exec::get_impl);
     }
 
-    if( exec->check_kernel( kd.get_kernel_name() ) ) 
+    if( !exec->check_kernel( kd.get_kernel_name() ) ) 
     {
-      
       auto mname = exec->get_mangled_name( kd.get_kernel_name() ); 
       if( mname )
       {
@@ -224,7 +236,7 @@ void exec_repo::check_and_register( kernel_desc& kd )
         if( func_ptr != NULL ) 
         {
           std::cout << "adding " << kd.get_kernel_name()  
-                    << "(" << kd.get_kernel_name() << ") to cpu repo" << std::endl;
+                    << "(" << mname.value() << ") to cpu repo : " << func_ptr <<  std::endl;
 
           exec->insert_kernel( kd.get_kernel_name(), mname, func_ptr);
 
@@ -233,6 +245,7 @@ void exec_repo::check_and_register( kernel_desc& kd )
       } else std::cout <<"Could not find kernel function " <<  kd.get_kernel_name() 
 	  	       <<" in " << impl <<  std::endl;
     }  //end of kernel creation
+    else std::cout << "Kernel already registered" << std::endl;
   } //binary esists
 }
 
@@ -241,11 +254,12 @@ void * exec_repo::find_kernel_fptr( std::string kernel_name , std::optional<std:
   //TBD
    auto bin_filt = [&](auto exec)
    {
-     if( kernel_impl) 
+     if( kernel_impl)
        return (exec.get_impl() == kernel_impl.value() ) && 
               ( exec.check_kernel(kernel_name) );
      else
        return exec.check_kernel(kernel_name);
+   
    }; 
   //
   auto bin_kernel = [&](auto exec)
@@ -254,7 +268,7 @@ void * exec_repo::find_kernel_fptr( std::string kernel_name , std::optional<std:
   };
   
   auto kernels = _programs | std::views::filter( bin_filt ) | std::views::transform( bin_kernel );
-
+   
   for( auto kernel : kernels)
   {
     return kernel.get_func_ptr();
@@ -265,9 +279,25 @@ void * exec_repo::find_kernel_fptr( std::string kernel_name , std::optional<std:
 
 cpu_exec::cpu_exec( std::string impl, void * bin_ptr)
 {
-  _impl = impl; 
-  _bin_ptr = bin_ptr;  
-  _header = _get_symtable_hdr();
+  struct stat sb; 
+
+  _impl     = impl; 
+  _bin_ptr  = bin_ptr;  
+  _header   = _get_symtable_hdr();
+  
+  FILE *file = fopen( _impl.c_str(), "rb" );
+  int fd     = fileno( file );
+  //get file size
+  fstat(fd, &sb );
+  _map_size  = sb.st_size; 
+
+  _full_map  = mmap(NULL, _map_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+  fclose( file ); 
+}
+
+cpu_exec::~cpu_exec()
+{
+  munmap( _full_map, _map_size);
 }
 
 
@@ -298,6 +328,7 @@ cpu_kernel& cpu_exec::find_kernel( std::string kernel_name )
 
 bool cpu_exec::check_kernel( std::string kernel_name)
 {
+
   auto iter1 = std::ranges::find( _kernels, kernel_name, &cpu_kernel::get_kname );
   auto iter2 = std::ranges::find( _kernels, kernel_name, &cpu_kernel::get_mkname);
 
@@ -307,8 +338,8 @@ bool cpu_exec::check_kernel( std::string kernel_name)
 
 void cpu_exec::insert_kernel( std::string kname, std::optional<std::string> mkernel_name, void * func_ptr)
 { 
-  std::string kernel_name = mkernel_name.value_or(kname);
-  std::string mkern = mkernel_name.value_or("");
+  std::string kernel_name = kname;
+  std::string mkern = mkernel_name.value_or(kname);
 
   auto k = check_kernel( kernel_name );
   if( !k )
@@ -336,14 +367,17 @@ Elf64_Shdr cpu_exec::_get_symtable_hdr()
     bool isElf = elf_func( elf_is_elf64, file);
     if( isElf )
     {
-      bool symtab_exists = elf_func(elf64_get_symtab_section, 
+      //get elf header
+      elf_func( elf64_get_elf_header, file, &elf_header);
+ 
+      bool strtab_exists = elf_func(elf64_get_strtab_section, 
                                     file,
                                     (const Elf64_Ehdr *) &elf_header, 
                                     &header);       
    
-      if( symtab_exists )
+      if( strtab_exists )
       {
-        std::cout << "Found symtab..." << std::endl;
+        std::cout << "Found strtab..." << header.sh_offset << " : " << header.sh_size << std::endl;
 
       } else std::cout << "Could not find symbol table " << std::endl;
 
@@ -358,12 +392,13 @@ Elf64_Shdr cpu_exec::_get_symtable_hdr()
 
 std::optional<std::string> cpu_exec::get_mangled_name( std::string kernel_name )
 {
-  auto cdata = std::string( &((char *) _bin_ptr)[_header.sh_offset], _header.sh_size); 
+  auto cdata = std::string( &((char *) _full_map)[_header.sh_offset], _header.sh_size); 
 
   std::smatch sof_match;
   std::string func_regex;
-  std::string delimiter = "([^\\. ]+)?";
-
+  char delim[] = "[^\x00]+";
+  std::string delimiter(delim, sizeof(delim) ) ;
+  
   //foudn exact name match
   if( _test( kernel_name ) ) return kernel_name;
 
@@ -372,24 +407,20 @@ std::optional<std::string> cpu_exec::get_mangled_name( std::string kernel_name )
   func_regex = std::accumulate( std::begin(sof_match), std::end(sof_match), 
                                 delimiter, [&](auto prev, auto cur)
                                 {
-                                  return (prev + cur.str() + delimiter );
+                                  std::string out;
+                                  out.append(prev.c_str(), prev.length()-1 ); //minux one to remove the stupid null
+                                  out.append(cur.str().c_str(), cur.str().length() );
+                                  out.append(delim, sizeof(delim) );
+                                  return out;
                                 } );
 
-  std::cout << "Printing " << func_regex << std::endl;
-
-  if( std::regex_search(cdata, sof_match, std::regex(func_regex) ) )
+  if( std::regex_search(cdata, sof_match, std::regex("_Z"+func_regex) ) )
   {
-
-    for( auto match : sof_match )
+    if( _test(sof_match[0]) )
     {
-      std::cout << "Checking function : " << match << std::endl;
-      if( _test(match) )
-      {
-        std::cout << "Successfuly found entrypoint for ..." << match <<  std::endl;
-        return match;
-      } //end of loading function
-      else std::cout << "No match found" << std::endl;
-    }
+      return sof_match[0];
+    } //end of loading function
+    else std::cout << "No match found" << std::endl;
   }
 
   return {};
@@ -404,12 +435,13 @@ bool cpu_exec::_test( std::string func_name )
 }
 
 subaction_context::subaction_context( ulong wid, std::vector<std::thread::id>& threads, std::vector<te_variable> k_args, std::vector<size_t> max_cnts )
-: _wid(wid), _kernel_args(k_args), _next_index(threads.size()), _padding(threads.size())
+: _wid(wid), _kernel_args(k_args), _padding(threads.size())
 {
-  
+ 
   using table_t = std::vector< std::vector<size_t > >;
-
+  
   auto len = std::accumulate( max_cnts.begin(), max_cnts.end(), 1, std::multiplies<size_t>{} ) + 1;
+  _next_index = _padding + len - 1;
 
   _index_table = table_t(len, std::vector<size_t>(max_cnts.size(), -1) );
 		        
@@ -430,8 +462,8 @@ subaction_context::subaction_context( ulong wid, std::vector<std::thread::id>& t
 		         out.at(i) =0;   
 	               }
                      }
-                     std::ranges::copy( out, std::ostream_iterator<size_t>(std::cout, ", ") );
-		     std::cout << std::endl;
+                     //std::ranges::copy( out, std::ostream_iterator<size_t>(std::cout, ", ") );
+		     //std::cout << std::endl;
 		     return out;
                   } ); 
  
@@ -439,24 +471,40 @@ subaction_context::subaction_context( ulong wid, std::vector<std::thread::id>& t
   auto table_padding = table_t(_padding, std::vector<size_t>(max_cnts.size(), 0) );
   //add padding
   _index_table.insert( _index_table.begin(), table_padding.begin(), table_padding.end() );
-  
+ 
   //prefill
   for(uint i=0; i < _padding; i++) _ci_per_thread.emplace(threads[i], i);
  
 
 }
 
-subaction_context& subaction_context::operator=( const subaction_context& )
+subaction_context& subaction_context::operator=( const subaction_context& rhs )
 {
   //TBD
-  std::cout << "NEED TO COMPLETE MOVE CTOR subaction_context" << std::endl;
+  _wid           = rhs._wid;
+  _func_ptr      = rhs._func_ptr;
+  _kernel_args   = rhs._kernel_args;
+  _ci_per_thread = rhs._ci_per_thread;
+  _index_table   = rhs._index_table;
+  _next_index    = rhs._next_index;
+  _finished      = rhs._finished;
+  _padding       = rhs._padding; 
+
   return *this;
 }
 
-subaction_context::subaction_context( const subaction_context&& )
+subaction_context::subaction_context( subaction_context&& rhs)
 {
   //TBD
-  std::cout << "NEED TO COMPLETE MOVE CTOR subaction_context" << std::endl;
+  _wid           = rhs._wid;
+  _func_ptr      = rhs._func_ptr;
+  _kernel_args   = rhs._kernel_args;
+  _ci_per_thread = rhs._ci_per_thread;
+  _index_table   = std::move(rhs._index_table);
+  _next_index    = rhs._next_index;
+  _finished      = rhs._finished;
+  _padding       = rhs._padding; 
+   
 }
 
 ulong subaction_context::get_wid()
@@ -479,7 +527,6 @@ void subaction_context::set_and_decr_index(std::thread::id tid)
 {
   _ci_per_thread.at(tid) = _next_index--;
  
-  //if any thread gets within the padded region everything is complete;
   _finished = _next_index < _padding;
 }
  

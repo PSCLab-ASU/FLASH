@@ -4,3 +4,4 @@ host.bin
 *.so
 *.bin
 *.o
+*/.nfs*

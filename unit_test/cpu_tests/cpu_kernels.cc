@@ -1,21 +1,20 @@
 #include <stdio.h>
+#include <iostream>
 
-__global__ void elmatmult_generic( float * a, float * b, float * c)
+extern size_t get_indices( int );
+
+void elmatmult_generic( float * a, float * b, float * c)
 {
-  
-  printf("Testing from elmatmult_generic [%d,%d,%d]\n",threadIdx.x, threadIdx.y, threadIdx.z);
-  printf("--Testing from elmatmult_generic %f * %f\n", a[threadIdx.x], b[threadIdx.x] );
-  c[threadIdx.x] = a[threadIdx.x] * b[threadIdx.x];
-  
+  auto x = get_indices(0);
+  c[x] = a[x] * b[x];
 
   return;
 }
 
-__global__ void elmatdiv_generic( float * a, float * b, float * c)
+void elmatdiv_generic( float * a, float * b, float * c)
 {
-  printf("Testing from elmatdiv_generic [%d,%d,%d]\n", threadIdx.x, threadIdx.y, threadIdx.z);
-  printf("--Testing from elmatdiv_generic %f / %f \n", a[threadIdx.x], b[threadIdx.x]);
-  c[threadIdx.x] = a[threadIdx.x] / b[threadIdx.x];
+  auto x = get_indices(0); 
+  c[x] = a[x] / b[x];
 
   return;
 }

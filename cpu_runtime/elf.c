@@ -129,15 +129,15 @@ static bool elf64_get_dynamic_section(FILE * file, const Elf64_Ehdr * elf_header
 	        return header->sh_type == SHT_DYNAMIC;
 }
 
-static bool elf32_get_symtab_section(FILE * file, const Elf32_Ehdr * elf_header, Elf32_Shdr * header) {
-            if (!elf32_get_section_header_by_name(file, elf_header, ".symtab", header))
+static bool elf32_get_strtab_section(FILE * file, const Elf32_Ehdr * elf_header, Elf32_Shdr * header) {
+            if (!elf32_get_section_header_by_name(file, elf_header, ".strtab", header))
                             return false;
-                return header->sh_type == SHT_SYMTAB;
+                return header->sh_type == SHT_STRTAB;
 }
 
-static bool elf64_get_symtab_section(FILE * file, const Elf64_Ehdr * elf_header, Elf64_Shdr * header) {
-            if (!elf64_get_section_header_by_name(file, elf_header, ".symtab", header))
+static bool elf64_get_strtab_section(FILE * file, const Elf64_Ehdr * elf_header, Elf64_Shdr * header) {
+            if (!elf64_get_section_header_by_name(file, elf_header, ".strtab", header))
                             return false;
-                return header->sh_type == SHT_SYMTAB;
+                return header->sh_type == SHT_STRTAB;
 }
 

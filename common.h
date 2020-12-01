@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <climits>
 #include <random>
+#include <iostream>
 
 #pragma once 
 #define EXPORT __attribute__((visibility("default")))
@@ -48,7 +49,7 @@ enum struct kernel_t { INT_SRC, EXT_SRC, INT_BIN, EXT_BIN };
 
 template<kernel_t k_type=kernel_t::INT_SRC, typename T=std::string, typename R=void, typename ... Args>
 using kernel_t_decl = std::optional< std::tuple_element_t<(uint)k_type, std::tuple<T, T, 
-                                                          std::function<R(Args...)>, T> > >;
+                                                          T, T> > >;
 struct kernel_desc
 {
   kernel_t    _kernel_type;
@@ -56,6 +57,7 @@ struct kernel_desc
   std::optional<std::string> _kernel_definition;
 
   std::string get_kernel_name() { return _kernel_name; }
+  kernel_t    get_kernel_type() { return _kernel_type; }
   std::optional<std::string> get_kernel_def(){ return _kernel_definition; }
 
 };

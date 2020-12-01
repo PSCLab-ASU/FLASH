@@ -16,7 +16,7 @@
 
 #pragma once
 
-size_t get_indices( int );
+size_t EXPORT get_indices( int );
 
 //template the _next_index with atomic to see how the performance fairs
 
@@ -27,7 +27,7 @@ struct subaction_context
   subaction_context( ulong, std::vector<std::thread::id>&, 
 		     std::vector<te_variable>, std::vector<size_t> );
 
-  subaction_context( const subaction_context&& );
+  subaction_context( subaction_context&& );
 
   subaction_context& operator=( const subaction_context& );
 
@@ -43,6 +43,8 @@ struct subaction_context
   size_t get_dim_index( std::thread::id& tid, int& ind);
 
   void exec_work_item();
+  
+  void * get_func_ptr() { return _func_ptr; }
 
   ////////////////////////////members///////////////////////////////
   ulong _wid;
@@ -67,7 +69,7 @@ struct cpu_kernel
   {
     _kernel_name  = kname;
     _mangled_name = mkname;
-    _func_ptr     = func_ptr;  
+    _func_ptr     = func_ptr;
   }
 
   cpu_kernel( const cpu_kernel& rhs )
@@ -107,11 +109,14 @@ struct cpu_exec
 {
   std::string _impl;
   void * _bin_ptr;  //this is the mmap of the file
+  void * _full_map;
+  size_t _map_size;
   Elf64_Shdr _header;
 
   std::vector<cpu_kernel> _kernels;
 
   cpu_exec( std::string impl, void * bin_ptr);
+  ~cpu_exec();
 
   std::string get_impl();
 
@@ -169,7 +174,7 @@ class cpu_runtime : public IFlashableRuntime
     
     static subaction_context& get_current_job()
     {
-      return *g_subaction_table.begin();
+      return g_subaction_table.front();
     }
 
     static void pop_current_job()
@@ -185,10 +190,16 @@ class cpu_runtime : public IFlashableRuntime
 
     static void remove_subaction( ulong wid )
     {
+      std::cout << "removing subaction ... " << std::endl;
       auto rem_e = std::ranges::find(g_subaction_table, wid, &subaction_context::get_wid );
  
       g_subaction_table.erase(rem_e);
 
+    }
+
+    static void clear_subactions()
+    {
+      g_subaction_table.clear();
     }
 
   private:
