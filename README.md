@@ -1,6 +1,6 @@
 # FlashWrapper
 Source :
-
+  export LD_LIBRARY_PATH=/archive-t2/Design/fpga_computing/wip/FlashWrapper:$LD_LIBRARY_PATH
   source /home/tools/altera/setup_scripts/Intel_Setup_19.1-pro_nalla_385a.sh
 
 Compile line: 

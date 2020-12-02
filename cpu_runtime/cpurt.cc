@@ -398,18 +398,26 @@ std::optional<std::string> cpu_exec::get_mangled_name( std::string kernel_name )
   std::string func_regex;
   char delim[] = "[^\x00]+";
   std::string delimiter(delim, sizeof(delim) ) ;
-  
+  std::vector<std::string> knamespaces;
+
   //foudn exact name match
   if( _test( kernel_name ) ) return kernel_name;
 
+  //fille the namespacesa
+  std::string _kname = kernel_name;
+  do{
+    if( std::regex_search(_kname, sof_match, std::regex("[^::]+") ) )
+      knamespaces.push_back( sof_match[0] );
+    _kname = sof_match.suffix();
+  }while( sof_match.size() );
+
   //parse namepsaces and construct function regex
-  std::regex_search(kernel_name, sof_match, std::regex("[^::]+") );
-  func_regex = std::accumulate( std::begin(sof_match), std::end(sof_match), 
+  func_regex = std::accumulate( std::begin(knamespaces), std::end(knamespaces), 
                                 delimiter, [&](auto prev, auto cur)
                                 {
                                   std::string out;
                                   out.append(prev.c_str(), prev.length()-1 ); //minux one to remove the stupid null
-                                  out.append(cur.str().c_str(), cur.str().length() );
+                                  out.append(cur.c_str(), cur.length() );
                                   out.append(delim, sizeof(delim) );
                                   return out;
                                 } );
