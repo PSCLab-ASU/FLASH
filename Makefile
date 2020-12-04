@@ -2,25 +2,30 @@
 .RECIPEPREFIX =
 .SECONDEXPANSION:
 
-export BUILD := debug
-BUILD_DIR    := ${CURDIR}/${BUILD}/
-FLASH_LIB    := $(BUILD_DIR)/lib/libflash_wrapper.so
-NVCC_LIBS    := $()
-NVCC_INC     := $()
-OCL_LIBS     := $()
-OCL_INC      := $()
+export BUILD  ?= debug
+BUILD_DIR     := ${CURDIR}/build/${BUILD}/
+export GLOBAL_BUILD_DIR := $(BUILD_DIR)
+
+FLASH_LIB     := $(BUILD_DIR)lib64/libflash_wrapper.so
+FLASH_H       := $(BUILD_DIR)/include/flash.h
+MAKEFILES_RT  := $(shell find ./*/ -type f -name "Makefile" -not -path "./*/*/*")
+FLASH_VARIANT ?= cpu_runtime
+FLASH_INC_H   := $(CURDIR)/flash_runtime
+RT_LIBS       = $(shell cat $(BUILD_DIR)/*/LDINCS)
+RT_SYMS       = $(shell cat $(BUILD_DIR)/*/LDFLAGS)
+UTILS_DIR     := $(CURDIR)/utils
 
 SHELL := /bin/bash
 COMPILER=gcc
 
-CXX.gcc := gcc
-CC.gcc  := gcc
-LD.gcc  := gcc
+CXX.gcc := g++
+CC.gcc  := g++
+LD.gcc  := g++
 AR.gcc  := ar
 
 CXXFLAGS.gcc.debug := -O0 -g -fstack-protector-all
 CXXFLAGS.gcc.release := -O3 -march=native -DNDEBUG
-CXXFLAGS.gcc := -pthread -std=c++2a -fconcepts-ts -fPIC -Wno-return-type -Wno-return-local-addr ${CXXFLAGS.gcc.${BUILD}}
+CXXFLAGS.gcc := -std=c++2a -shared -fPIC -fvisibility=hidden ${CXXFLAGS.gcc.${BUILD}}
 
 CXXFLAGS := ${CXXFLAGS.${COMPILER}}
 CFLAGS   := ${CFLAGS.${COMPILER}}
@@ -35,52 +40,33 @@ LDFLAGS.release := $(LDFLAGS.common)
 LDFLAGS         := ${LDFLAGS.${BUILD}}
 LDLIBS          := 
 
-all : create_build_dir build_flash_so
+all : create_build_dir build_flash_so move_flash_header
                    
-ifeq ($(FLASH_VARIANT), gpu_only)
-backends : gpu_runtime 
-else ifeq ($(FLASH_VARIANT), fpga_only)
-backends : fpga_runtime 
-else ifeq ($(FLASH_VARIANT), cpu_only)
-backends : cpu_runtime 
-else ifeq ($(FLASH_VARIANT), all)
-backends : backend_all 
-else
-backends : cpu_runtime
-endif
-
 ###################################################################################
 #top level object generation
-$(BUILD_DIR)%.o : $(CURDIR)%.cc $(CURDIR)%.h
-	@echo Compiling $(notdir $@)...
-	@$(COMPILE.CXX)
+build_flash_so : runtimes
+	$(LD) $(shell find build/ -name \*.o ) -o $(FLASH_LIB) -I$(FLASH_INC_H) -I$(UTILS_DIR) $(CXXFLAGS) $(LDLIBS) $(RT_LIBS) $(RT_SYMS) $(LDFLAGS)
 
-flashrt        :  $$(subst .cc, .o, $$(addprefix $(BUILD_DIR), $$(wildcard flash_runtime/* ) ))
-cpu_runtime    :  $$(subst .cc, .o, $$(addprefix $(BUILD_DIR), $$(wildcard cpu_runtime/*   ) ))
-gpu_runtime    :  $$(subst .cc, .o, $$(addprefix $(BUILD_DIR), $$(wildcard gpu_runtime/*   ) ))
-fpga_runtime   :  $$(subst .cc, .o, $$(addprefix $(BUILD_DIR), $$(wildcard fpga_runtime/*  ) ))
-backend_all    :  cpu_runtime gpu_runtime fpga_runtime
+runtimes : $(addsuffix .mk, $(MAKEFILES_RT) )
+	@echo "Completed Runtime builds"
 
-unit_test_cpu  : $$(subst .cc, .o, $$(addprefix $(BUILD_DIR), $$(wildcard unit_test/cpu_tests/* ) ))
-unit_test_gpu  : $$(subst .cc, .o, $$(addprefix $(BUILD_DIR), $$(wildcard unit_test/cpu_tests/* ) ))
-unit_test_fpga : $$(subst .cc, .o, $$(addprefix $(BUILD_DIR), $$(wildcard unit_test/cpu_tests/* ) ))
-unit_test_all  : unit_test_cpu unit_test_gpu unit_test_fpga
-
-
-build_flash_so : flashrt backends
-	$(LD) $(shell find build/ -name \*.o ) -o $(FLASH_LIB) $(LDLIBS) $(LDFLAGS) -shared -fvisibility=hidden
-
-
+$(addsuffix .mk, $(MAKEFILES_RT) ):
+	@echo global_build_dir = $(GLOBAL_BUILD_DIR)
+	@$(MAKE) -C $(dir $@) all FLASH_VARIANT=$(FLASH_VARIANT) FLASH_BASE=$(CURDIR)
 #####################################################################################
 
 #####################################################################################
 #####################################################################################
 #####################################################################################
+
+move_flash_header : 
+	@echo Copying flash.h...
+	@cp $(CURDIR)/$(notdir $(FLASH_H) ) $(FLASH_H)
 
 # Create the build directory and sub dirs on demand.
-create_build_dir : ${build_dir} ${OUTPUT_DIRS}
+create_build_dir : $(dir ${FLASH_LIB} ) $(dir ${FLASH_H} )
 
-${build_dir} ${OUTPUT_DIRS} : 
+$(dir ${FLASH_LIB} ) $(dir ${FLASH_H} ): 
 	@mkdir -p $@
 
 clean:

@@ -4,7 +4,7 @@
 
 //extern size_t get_indices( int );
 
-using MATMULT = KernelDefinition<"elmatmult_generic", kernel_t::INT_BIN, float*, float*>; 
+using MATMULT = KernelDefinition<"elmatmult_generic", kernel_t::INT_BIN, eq_separable<float>, float * >; 
 using MATDIV  = KernelDefinition<"elmatdiv_generic",  kernel_t::INT_BIN, float*, float*>; 
 
 template <typename T>
@@ -34,7 +34,7 @@ int main(int argc, const char * argv[])
     // Lazy execution
     // Builder
     // Lookup
-    // Reflectiona
+    // Reflection
     // Dynamic dispatching
     // Self-registry factory
     size_t sz = 512;

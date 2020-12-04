@@ -6,9 +6,12 @@
 #include <errno.h>
 #include <elf.h>
 #include <link.h>
+#include "elf_ext.h"
 
+#ifndef UTILS_ELFEXT
+#define UTILS_ELFEXT
 
-static bool elf_get_ident(FILE * file, unsigned char * e_ident) {
+bool elf_get_ident(FILE * file, unsigned char * e_ident) {
 	    if (fseek(file, 0, SEEK_SET))
 		            return false;
 	        if (fread(e_ident, EI_NIDENT, 1, file) != 1)
@@ -16,7 +19,7 @@ static bool elf_get_ident(FILE * file, unsigned char * e_ident) {
 		    return (strncmp((char *) e_ident, ELFMAG, SELFMAG) == 0);
 }
 
-static unsigned char elf_get_class(FILE * file) {
+unsigned char elf_get_class(FILE * file) {
 	    unsigned char e_ident[EI_NIDENT];
 	        if (!elf_get_ident(file, e_ident))
 			        return '\0';
@@ -27,7 +30,7 @@ bool elf_is_elf64(FILE * file) {
 	    return (elf_get_class(file) == ELFCLASS64);
 }
 
-static bool elf32_get_elf_header(FILE * file, Elf32_Ehdr * elf_header) {
+bool elf32_get_elf_header(FILE * file, Elf32_Ehdr * elf_header) {
 	    if (fseek(file, 0, SEEK_SET))
 		            return false;
 	        if (fread(elf_header, sizeof(Elf32_Ehdr), 1, file) != 1)
@@ -35,7 +38,7 @@ static bool elf32_get_elf_header(FILE * file, Elf32_Ehdr * elf_header) {
 		    return (strncmp((char *) &elf_header->e_ident, ELFMAG, SELFMAG) == 0);
 }
 
-static bool elf64_get_elf_header(FILE * file, Elf64_Ehdr * elf_header) {
+bool elf64_get_elf_header(FILE * file, Elf64_Ehdr * elf_header) {
 	    if (fseek(file, 0, SEEK_SET))
 		            return false;
 	        if (fread(elf_header, sizeof(Elf64_Ehdr), 1, file) != 1)
@@ -43,7 +46,7 @@ static bool elf64_get_elf_header(FILE * file, Elf64_Ehdr * elf_header) {
 		    return (strncmp((char *) &elf_header->e_ident, ELFMAG, SELFMAG) == 0);
 }
 
-static bool elf32_get_section_header(FILE * file, const Elf32_Ehdr * elf_header, unsigned int index,
+bool elf32_get_section_header(FILE * file, const Elf32_Ehdr * elf_header, unsigned int index,
 		                                   Elf32_Shdr * header) {
 	    unsigned int offset = elf_header->e_shoff + elf_header->e_shentsize * index;
 	        if (fseek(file, offset, SEEK_SET))
@@ -51,7 +54,7 @@ static bool elf32_get_section_header(FILE * file, const Elf32_Ehdr * elf_header,
 		    return (fread(header, sizeof(Elf32_Shdr), 1, file) == 1);
 }
 
-static bool elf64_get_section_header(FILE * file, const Elf64_Ehdr * elf_header, unsigned int index,
+bool elf64_get_section_header(FILE * file, const Elf64_Ehdr * elf_header, unsigned int index,
 		                                   Elf64_Shdr * header) {
 	    unsigned int offset = elf_header->e_shoff + elf_header->e_shentsize * index;
 	        if (fseek(file, offset, SEEK_SET))
@@ -59,7 +62,7 @@ static bool elf64_get_section_header(FILE * file, const Elf64_Ehdr * elf_header,
 		    return (fread(header, sizeof(Elf64_Shdr), 1, file) == 1);
 }
 
-static char * elf32_get_string(FILE * file, const Elf32_Ehdr * elf_header, unsigned int offset) {
+char * elf32_get_string(FILE * file, const Elf32_Ehdr * elf_header, unsigned int offset) {
 	    Elf32_Shdr sec_head;
 	        if (!elf32_get_section_header(file, elf_header, elf_header->e_shstrndx, &sec_head))
 			        return NULL;
@@ -75,7 +78,7 @@ static char * elf32_get_string(FILE * file, const Elf32_Ehdr * elf_header, unsig
 				    return strndup(buf, got);
 }
 
-static char * elf64_get_string(FILE * file, const Elf64_Ehdr * elf_header, unsigned int offset) {
+char * elf64_get_string(FILE * file, const Elf64_Ehdr * elf_header, unsigned int offset) {
 	    Elf64_Shdr sec_head;
 	        if (!elf64_get_section_header(file, elf_header, elf_header->e_shstrndx, &sec_head))
 			        return NULL;
@@ -91,7 +94,7 @@ static char * elf64_get_string(FILE * file, const Elf64_Ehdr * elf_header, unsig
 				    return strndup(buf, got);
 }
 
-static bool elf32_get_section_header_by_name(FILE * file, const Elf32_Ehdr * elf_header, const char * name,
+bool elf32_get_section_header_by_name(FILE * file, const Elf32_Ehdr * elf_header, const char * name,
 		        Elf32_Shdr * header) {
 	    bool ret = false;
 	        for (int i = 0; (i < elf_header->e_shnum) && (!ret); ++i) {
@@ -104,7 +107,7 @@ static bool elf32_get_section_header_by_name(FILE * file, const Elf32_Ehdr * elf
 		    return ret;
 }
 
-static bool elf64_get_section_header_by_name(FILE * file, const Elf64_Ehdr * elf_header, const char * name,
+bool elf64_get_section_header_by_name(FILE * file, const Elf64_Ehdr * elf_header, const char * name,
 		        Elf64_Shdr * header) {
 	    bool ret = false;
 	        for (int i = 0; (i < elf_header->e_shnum) && (!ret); ++i) {
@@ -117,27 +120,27 @@ static bool elf64_get_section_header_by_name(FILE * file, const Elf64_Ehdr * elf
 		    return ret;
 }
 
-static bool elf32_get_dynamic_section(FILE * file, const Elf32_Ehdr * elf_header, Elf32_Shdr * header) {
+bool elf32_get_dynamic_section(FILE * file, const Elf32_Ehdr * elf_header, Elf32_Shdr * header) {
 	    if (!elf32_get_section_header_by_name(file, elf_header, ".dynamic", header))
 		            return false;
 	        return header->sh_type == SHT_DYNAMIC;
 }
 
-static bool elf64_get_dynamic_section(FILE * file, const Elf64_Ehdr * elf_header, Elf64_Shdr * header) {
+bool elf64_get_dynamic_section(FILE * file, const Elf64_Ehdr * elf_header, Elf64_Shdr * header) {
 	    if (!elf64_get_section_header_by_name(file, elf_header, ".dynamic", header))
 		            return false;
 	        return header->sh_type == SHT_DYNAMIC;
 }
 
-static bool elf32_get_strtab_section(FILE * file, const Elf32_Ehdr * elf_header, Elf32_Shdr * header) {
+bool elf32_get_strtab_section(FILE * file, const Elf32_Ehdr * elf_header, Elf32_Shdr * header) {
             if (!elf32_get_section_header_by_name(file, elf_header, ".strtab", header))
                             return false;
                 return header->sh_type == SHT_STRTAB;
 }
 
-static bool elf64_get_strtab_section(FILE * file, const Elf64_Ehdr * elf_header, Elf64_Shdr * header) {
+bool elf64_get_strtab_section(FILE * file, const Elf64_Ehdr * elf_header, Elf64_Shdr * header) {
             if (!elf64_get_section_header_by_name(file, elf_header, ".strtab", header))
                             return false;
                 return header->sh_type == SHT_STRTAB;
 }
-
+#endif

@@ -10,8 +10,7 @@
 #include <boost/align/aligned_allocator.hpp>
 #include <regex>
 #include <ranges>
-
-#include "elf.c"
+#include "elf_ext.h"
 
 #pragma once
 

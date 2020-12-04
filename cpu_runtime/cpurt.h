@@ -11,8 +11,7 @@
 #include <flash_runtime/flash_interface.h>
 #include <flash_runtime/flashable_factory.h>
 #include <boost/align/aligned_allocator.hpp>
-
-#include "elf.c"
+#include "elf_ext.h"
 
 #pragma once
 

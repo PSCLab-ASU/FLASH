@@ -3,14 +3,11 @@
 .SECONDEXPANSION:
 
 BUILD         ?= debug
-NAME          := opencl_runtime
+NAME          := utils
 BUILD_DIR     := ${GLOBAL_BUILD_DIR}
 OUTPUTDIR     := ${GLOBAL_BUILD_DIR}/$(NAME)/
-FLASH_VARIANT := $(NAME)
+FLASH_VARIANT ?= $(NAME)
 FLASH_BASE    ?= $(BUILD_DIR)/../../
-UTILS_DIR     := $(FLASH_BASE)/utils
-OCL_HOST_ROOT := $(INTELFPGAOCLSDKROOT)/host/
-OCL_INC       := $(OCL_HOST_ROOT)/include/CL/
 
 SHELL := /bin/bash
 COMPILER=gcc
@@ -22,7 +19,7 @@ AR.gcc  := ar
 
 CXXFLAGS.gcc.debug := -O0 -g -fstack-protector-all
 CXXFLAGS.gcc.release := -O3 -march=native -DNDEBUG
-CXXFLAGS.gcc := -std=c++2a -fPIC ${CXXFLAGS.gcc.${BUILD}}
+CXXFLAGS.gcc := -fPIC -std=c++2a ${CXXFLAGS.gcc.${BUILD}}
 
 CXXFLAGS := ${CXXFLAGS.${COMPILER}}
 CFLAGS   := ${CFLAGS.${COMPILER}}
@@ -31,14 +28,14 @@ CC       := ${CC.${COMPILER}}
 LD       := ${LD.${COMPILER}}
 AR       := ${AR.${COMPILER}}
 
-LDFLAGS.common  := -std=c++2a -lstdc++ -lOpenCL 
+LDFLAGS.common  := -lpthread -ldl
 LDFLAGS.debug   := $(LDFLAGS.common)
 LDFLAGS.release := $(LDFLAGS.common)
 LDFLAGS         := ${LDFLAGS.${BUILD}}
-LDLIBS          := -L$(OCL_HOST_ROOT)/linux64/lib
+LDLIBS          := 
 
-all : create_build_dir backend
-                   
+all : create_build_dir backend write_linker_dep
+
 ifeq ($(filter $(NAME),$(FLASH_VARIANT)),)
 backend : $(NAME)
 else ifeq ($(filter all,$(FLASH_VARIANT)),)
@@ -48,7 +45,8 @@ backend :
 	@echo Bypassing making $(NAME) in $(CURDIR) : FV=$(FLASH_VARIANT)
 endif
 
-COMPILE.CXX = ${CXX} -c $^ -o $@ -I$(dir $^) -I$(FLASH_BASE) -I$(FLASH_BASE) -I$(UTILS_DIR) -I$(OCL_INC) ${CXXFLAGS} 
+
+COMPILE.CXX = ${CXX} -c $^ -o $@ -I$(dir $^) -I$(FLASH_BASE) ${CXXFLAGS} 
 
 ###################################################################################
 #top level object generation
@@ -66,8 +64,8 @@ create_build_dir : ${OUTPUTDIR}
 write_linker_dep :
 	@echo $(LDLIBS) >> $(OUTPUTDIR)/LDINCS
 	@echo $(LDFLAGS) >> $(OUTPUTDIR)/LDFLAGS 
-
-${OUTPUTDIR} :
+	
+${OUTPUTDIR} : 
 	@mkdir -p $@
         
 
