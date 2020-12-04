@@ -4,7 +4,10 @@ The FlashWrapper is a framework that fascilitates the interoperability and porta
 
 # Building shared object (.so) for default (CPU) Backends
 ```
-1. make OR make all
+1. make OR make all                                                              #enables CPU, CUDA*, FPGA** by DEFAULT
+
+*  Dependent on having OpenCL for Intel FPGA installed
+** Dependent on having CUDA Toolkit installed
 ```
 The output .so will be placed in : ./build/lib64 and headers will be in ./build/include
 
