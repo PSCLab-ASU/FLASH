@@ -53,7 +53,7 @@ Ex. of member function attribute
   };
 ```
 
-### The CPU runtime engine uses a single method for indicating which work items is currently being executed. It is an Nth dimensional indexing system driven by the "defer" or "exec" interface.
+The CPU runtime engine uses a single method for indicating which work items is currently being executed. It is an Nth dimensional indexing system driven by the "defer" or "exec" interface.
 
   Ex. defer(dim1, dim2, dim3,..., dimN) or exec(dim1, dim2, dim3,..., dimN)  #dims[N] are of type size_t
     
