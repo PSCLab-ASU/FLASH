@@ -11,7 +11,9 @@ The output .so will be placed in : ./build/lib64 and headers will be in ./build/
 # Building shared object with specific backends
 valid backends are : cpu_runtime, cuda_runtime, opencl_runtime (Intel FPGA-only)
 ```
-1. make FLASH_VARIANT=[backend[,...]]            ex. make FLASH_VARIANT=cpu_runtime,cuda_runtime #enables CPU and CUDA backends 
+1. make FLASH_VARIANT=[backend[,...]]            
+
+ex. make FLASH_VARIANT=cpu_runtime,cuda_runtime #enables CPU and CUDA backends 
 ```
 
 # Test builds notes
