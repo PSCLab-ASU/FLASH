@@ -61,7 +61,7 @@ Ex. of member function attribute
     9. {2, 2, 0}  18. {2, 2, 1}  27. {2, 2, 2}
     
 The kernels can make a call to size_t get_indices( int dim) to retrieve work item information.
-
+```
 Ex. 
   void elementwise_matrix_multiplication( float * a, float * b, float * c)
   {
@@ -69,7 +69,7 @@ Ex.
     c[x] = a[x] * b[x];
     return;
   }
-
+```
 ## Example compilation
 
   Ex g++ main.cc -o host.bin -I./build/include -lflash_wrapper -std=c++2a -ldl -lpthread -rdynamic
