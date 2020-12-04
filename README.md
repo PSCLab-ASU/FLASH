@@ -25,12 +25,15 @@ Building applications require the use of c++20 features, however NVCC doesn't su
 
 Ex.
   Building main with C++20
+  
     g++ -c cuda_main.cc -o cuda_main.o -I./build/include -L./build/lib64 -lflash_wrapper -lcuda -std=c++2a
   
   Building CUDA kernels
+  
     nvcc -arch=sm_50 -c cuda_kernels.cu -o cuda_kernels.o
 
   Linking main with cuda object files:
+  
     nvcc -arch=sm_50 cuda_kernels.o cuda_main.o -o host.bin -I./build/include -L./build/lib64 -lflash_wrapper -lcuda
 
 ## Building CPU unit test
