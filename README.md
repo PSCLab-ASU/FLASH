@@ -1,7 +1,7 @@
 # FlashWrapper Introduction
-Source for Intel FPGA:
-  source /home/tools/altera/setup_scripts/Intel_Setup_19.1-pro_nalla_385a.sh
-  
+
+The FlashWrapper is a framework that fascilitates the interoperability and portability of application towards hetereogenous accelerators. It decouples the application and allow dynamic dispatch of kernels on different accelerators while minimizing the refactoring efforts of the applications for current and future accelerators. 
+
 # Building shared object (.so) for default (CPU) Backends
 
 1. make OR make all
