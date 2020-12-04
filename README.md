@@ -35,14 +35,16 @@ CPU kernels in the form of free functions or member functions must be built with
 Member functions must be  attributed with [[gnu::used]] if thier only invokation is via the flash runtime else disregard the attribute. Free functions do not require the function attribute.
 
 Ex. of member function attribute 
-{
-  struct TEST{
+
+```  
+  struct TEST 
+  {
     [[gnu::used]]
-    void hello_world(){}
-    
+    void hello_world(){}    
     int i=0;
   };
-}
+```
+
 The CPU runtime engine uses a single method for indicating which work items is currently being executed. It is an Nth dimensional indexing system driven by the "defer" or "exec" interface.
 
   Ex. defer(dim1, dim2, dim3,..., dimN) or exec(dim1, dim2, dim3,..., dimN)  #dims[N] are of type size_t
