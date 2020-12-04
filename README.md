@@ -28,7 +28,7 @@ Ex.
   Linking main with cuda object files:
     nvcc -arch=sm_50 cuda_kernels.o cuda_main.o -o host.bin -I./build/include -L./build/lib64 -lflash_wrapper -lcuda
 
-Building CPU unit test
+## Building CPU unit test
 
 CPU kernels in the form of free functions or member functions must be built with -rdynamic, -ldl and -lpthread
 
@@ -45,7 +45,7 @@ Ex. of member function attribute
   };
 ```
 
-The CPU runtime engine uses a single method for indicating which work items is currently being executed. It is an Nth dimensional indexing system driven by the "defer" or "exec" interface.
+### The CPU runtime engine uses a single method for indicating which work items is currently being executed. It is an Nth dimensional indexing system driven by the "defer" or "exec" interface.
 
   Ex. defer(dim1, dim2, dim3,..., dimN) or exec(dim1, dim2, dim3,..., dimN)  #dims[N] are of type size_t
     
@@ -70,7 +70,7 @@ Ex.
     return;
   }
 
-Example compilation
+## Example compilation
 
   Ex g++ main.cc -o host.bin -I./build/include -lflash_wrapper -std=c++2a -ldl -lpthread -rdynamic
 
