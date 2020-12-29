@@ -20,7 +20,7 @@ AR.gcc  := ar
 
 CXXFLAGS.gcc.debug := -O0 -g -fstack-protector-all
 CXXFLAGS.gcc.release := -O3 -march=native -DNDEBUG
-CXXFLAGS.gcc := -fPIC -std=c++2a ${CXXFLAGS.gcc.${BUILD}}
+CXXFLAGS.gcc := -fPIC -fvisibility=default -std=c++2a ${CXXFLAGS.gcc.${BUILD}}
 
 CXXFLAGS := ${CXXFLAGS.${COMPILER}}
 CFLAGS   := ${CFLAGS.${COMPILER}}
@@ -37,9 +37,9 @@ LDLIBS          :=
 
 all : create_build_dir backend write_linker_dep
 
-ifeq ($(filter $(NAME),$(FLASH_VARIANT)),)
+ifneq ($(filter $(NAME),$(FLASH_VARIANT)),)
 backend : $(NAME)
-else ifeq ($(filter all,$(FLASH_VARIANT)),)
+else ifneq ($(filter all,$(FLASH_VARIANT)),)
 backend : $(NAME) 
 else
 backend :
@@ -53,7 +53,7 @@ COMPILE.CXX = ${CXX} -c $^ -o $@ -I$(dir $^) -I$(FLASH_BASE) -I$(UTILS_DIR) ${CX
 #top level object generation
 $(OUTPUTDIR)%.o : $(CURDIR)/%.cc
 	@echo Compiling $(notdir $@)...
-	@$(COMPILE.CXX)
+	$(COMPILE.CXX)
 
 $(NAME)    :  $(patsubst %.cc, %.o, $(addprefix $(OUTPUTDIR), $(wildcard *.cc) ))
 

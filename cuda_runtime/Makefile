@@ -38,9 +38,9 @@ LDLIBS          := -L$(CUDA_ROOT)/lib64
 
 all : create_build_dir backend 
                    
-ifeq ($(filter $(NAME),$(FLASH_VARIANT)),)
+ifneq ($(filter $(NAME),$(FLASH_VARIANT)),)
 backend : $(NAME)
-else ifeq ($(filter all,$(FLASH_VARIANT)),)
+else ifneq ($(filter all,$(FLASH_VARIANT)),)
 backend : $(NAME) 
 else
 backend :

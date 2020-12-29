@@ -6,7 +6,7 @@ BUILD         ?= debug
 NAME          := opencl_runtime
 BUILD_DIR     := ${GLOBAL_BUILD_DIR}
 OUTPUTDIR     := ${GLOBAL_BUILD_DIR}/$(NAME)/
-FLASH_VARIANT := $(NAME)
+FLASH_VARIANT ?= $(NAME)
 FLASH_BASE    ?= $(BUILD_DIR)/../../
 UTILS_DIR     := $(FLASH_BASE)/utils
 OCL_HOST_ROOT := $(INTELFPGAOCLSDKROOT)/host/
@@ -39,9 +39,9 @@ LDLIBS          := -L$(OCL_HOST_ROOT)/linux64/lib
 
 all : create_build_dir backend
                    
-ifeq ($(filter $(NAME),$(FLASH_VARIANT)),)
+ifneq ($(filter ${NAME},${FLASH_VARIANT}),)
 backend : $(NAME)
-else ifeq ($(filter all,$(FLASH_VARIANT)),)
+else ifneq ($(filter all,${FLASH_VARIANT}),)
 backend : $(NAME) 
 else
 backend :

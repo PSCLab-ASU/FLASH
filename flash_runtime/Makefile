@@ -5,9 +5,10 @@
 NAME          := flash_runtime
 BUILD_DIR     := ${GLOBAL_BUILD_DIR}
 OUTPUTDIR     := ${GLOBAL_BUILD_DIR}/$(NAME)/
-FLASH_VARIANT := all
-FLASH_BASE    := $(BUILD_DIR)/../
-FLASH_RT      := $(BUILD_DIR)/flash_runtime/
+FLASH_VARIANT ?= ${NAME}
+FLASH_BASE    ?= $(BUILD_DIR)/../
+FLASH_RT      := $(FLASH_BASE)/flash_runtime/
+UTILS_DIR     := $(FLASH_BASE)/utils
 
 SHELL := /bin/bash
 COMPILER=gcc
@@ -19,7 +20,7 @@ AR.gcc  := ar
 
 CXXFLAGS.gcc.debug := -O0 -g -fstack-protector-all
 CXXFLAGS.gcc.release := -O3 -march=native -DNDEBUG
-CXXFLAGS.gcc := -std=c++2a ${CXXFLAGS.gcc.${BUILD}}
+CXXFLAGS.gcc := -fPIC -fvisibility=default -std=c++2a ${CXXFLAGS.gcc.${BUILD}}
 
 CXXFLAGS := ${CXXFLAGS.${COMPILER}}
 CFLAGS   := ${CFLAGS.${COMPILER}}
@@ -35,24 +36,27 @@ LDFLAGS         := ${LDFLAGS.${BUILD}}
 LDLIBS          := 
 
 all : create_build_dir backend
+
                    
-ifeq ($(FLASH_VARIANT),all)
 backend : $(NAME)
-else ifeq ($(FLASH_VARIANT),$(NAME))
-backend : $(NAME) 
-else
-backend :
-	@echo Bypassing making $(NAME) in $(CURDIR) 
-endif
+
+#ifeq ($(FLASH_VARIANT),all)
+#backend : $(NAME)
+#else ifeq ($(FLASH_VARIANT),$(NAME))
+#backend : $(NAME) 
+#else
+#backend :
+#	@echo Bypassing making $(NAME) in $(CURDIR) 
+#endif
 
 
-COMPILE.CXX = ${CXX} -c $^ -o $@ -I$(dir $^) -I$(FLASH_BASE) -I$(FLASH_RT) ${CXXFLAGS} 
+COMPILE.CXX = ${CXX} -c $^ -o $@ -I$(dir $^) -I${UTILS_DIR} -I$(FLASH_BASE) -I$(FLASH_RT) ${CXXFLAGS} 
 
 ###################################################################################
 #top level object generation
 $(OUTPUTDIR)%.o : $(CURDIR)/%.cc
 	@echo Compiling $(notdir $@)...
-	@$(COMPILE.CXX)
+	$(COMPILE.CXX)
 
 $(NAME)    :  $(patsubst %.cc, %.o, $(addprefix $(OUTPUTDIR), $(wildcard *.cc) ))
 

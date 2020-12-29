@@ -3,9 +3,11 @@
 #include <boost/align/aligned_allocator.hpp>
 
 //extern size_t get_indices( int );
+class TEST;
 
-using MATMULT = KernelDefinition<"elmatmult_generic", kernel_t::INT_BIN, eq_separable<float>, float * >; 
-using MATDIV  = KernelDefinition<"elmatdiv_generic",  kernel_t::INT_BIN, float*, float*>; 
+using MATMULT   = KernelDefinition<2, "elmatmult_generic", kernel_t::INT_BIN, float *, float * >; 
+using MATDIV    = KernelDefinition<2, "elmatdiv_generic",  kernel_t::INT_BIN, float*, float*>; 
+using MATDIV_T  = KernelDefinition<2, "TEST::elmatdiv_generic", kernel_t::INT_BIN, TEST*, float*, float*>; 
 
 template <typename T>
 using aligned_vector = std::vector<T, boost::alignment::aligned_allocator<T, 64>>;
@@ -26,7 +28,6 @@ struct TEST
 
 };
 
-using MATDIV_T  = KernelDefinition<"TEST::elmatdiv_generic", kernel_t::INT_BIN, TEST*, float*, float*>; 
 
 int main(int argc, const char * argv[])
 {
@@ -45,10 +46,10 @@ int main(int argc, const char * argv[])
     float * E = C + sz, *F = E + sz, *G = F + sz;
 
     RuntimeObj ocrt(flash_rt::get_runtime("ALL_CPU") , MATMULT{ argv[0] }, 
-                    MATDIV_T{argv[0]} );
+                    MATDIV{argv[0]} );
     //submit
     ocrt.submit(MATMULT{}, A, B, C).sizes(sz,sz,sz).defer((size_t)32, (size_t)1, (size_t)1)
-        .submit(MATDIV_T{}, &t1, C, F, G).sizes((size_t) 1, sz,sz,sz).exec((size_t)32, (size_t)1, (size_t) 1);
+        .submit(MATDIV{},  C, F, G).sizes(sz,sz,sz).exec((size_t)32, (size_t)1, (size_t) 1);
 
     
     std::cout << "C = ";

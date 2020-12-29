@@ -1,6 +1,6 @@
 #include <memory>
 #include <iostream>
-#include <common.h>
+#include <utils/common.h>
 #include <vector>
 #include <map>
 #include <thread>
@@ -11,9 +11,10 @@
 #include <flash_runtime/flash_interface.h>
 #include <flash_runtime/flashable_factory.h>
 #include <boost/align/aligned_allocator.hpp>
-#include "elf_ext.h"
+#include "utils/elf_ext.h"
 
 #pragma once
+
 
 size_t EXPORT get_indices( int );
 

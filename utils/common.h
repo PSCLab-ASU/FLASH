@@ -11,11 +11,44 @@
 #include <climits>
 #include <random>
 #include <iostream>
+#include <type_traits>
+#include <cmath>
 
 #pragma once 
 #define EXPORT __attribute__((visibility("default")))
 
+struct NullType {};
+struct Attr {};
+
+enum struct DIRECTION { IN, INOUT, OUT };
 enum struct MEM_MOVE { TO_DEVICE, TO_HOST };
+
+
+struct ParmAttr{
+  bool is_pointer;
+  bool is_container;
+  bool is_flash_mem;
+  bool is_rvalue_refer;
+
+  DIRECTION dir;
+};
+
+template< typename T>
+concept IsAttribute = std::is_base_of_v<Attr, T>;
+
+template<typename T>
+concept IsContainer = requires (T a){
+  typename T::value_type;
+  { a.data() } -> std::same_as<std::add_pointer_t<typename T::value_type> >;
+  a.size();
+};
+
+template<typename T>
+concept IsPointer = std::is_pointer_v<std::decay_t<T> > &&
+(std::is_integral_v<std::remove_pointer_t<std::decay_t<T> > > ||
+ std::is_floating_point_v<std::remove_pointer_t<std::decay_t<T> > > );
+
+
 
 using override_kernel_t = std::pair<
                             std::string,
@@ -81,11 +114,23 @@ struct status {
 
 };
 
+struct flash_variable
+{
+  size_t buffer_id;
+  //if true owner of the flash, false if the applications owns
+  bool temporary;
+  std::pair<void *, size_t> prefetch_buffer;
+
+};
+
+
 struct te_variable
 {
   void * data;
   uint type_size;
   size_t vec_size; 
+  ParmAttr parm_attr;
+  std::optional<flash_variable> flash_buffer_attr;
 
   void * get_data()  { return data; }
   size_t get_bytes() { return type_size*vec_size; }
@@ -93,17 +138,56 @@ struct te_variable
 
 
 template<typename ... Ts, size_t N = sizeof...(Ts), typename Indices = std::make_index_sequence<N> >
-std::vector<te_variable> erase_tuple( std::tuple<Ts...> tup,  std::array<size_t, N> sizes )
+std::vector<te_variable> erase_tuple( std::tuple<Ts...>& tup,  std::array<ParmAttr, N> parm_attr, std::array<size_t, N> sizes )
 {
+  /* important note: tup is being passed by reference becayse the parameters are being converted to pointers
+   * and must live after this function retruns */  
   std::vector<te_variable> _te_vars;
   using tuple_type = std::tuple<Ts...>;
 
-  auto fill = [&]<std::size_t... I >(std::index_sequence<I...> )
+  auto fill = [&]<size_t... I >(std::index_sequence<I...> )
   {
-    bool dummy[N] ={ (_te_vars.push_back({(void *) std::get<I>(tup), 
-                      sizeof(std::remove_pointer_t<std::tuple_element_t<I,tuple_type> >),
-                      sizes[I]} ), false)...};
-                       
+    auto te_conv = [&](size_t Idx, auto&& arg  )
+    {
+      const bool is_flash_mem = IsAttribute<std::remove_pointer_t<decltype(arg)> >;
+      te_variable te; 
+      if constexpr ( !is_flash_mem )
+      { 
+        using Arg = std::remove_pointer_t<decltype(arg) >;
+
+        //primitive data types
+        if constexpr( IsContainer< Arg > )
+        {
+          te = te_variable { reinterpret_cast<void *>( arg->data() ),
+                             sizeof(Arg::value_type),
+                             arg.size(), parm_attr[Idx], {} };
+        }
+        else
+        {
+          te = te_variable { reinterpret_cast<void *>( arg ),
+                             sizeof(std::remove_pointer_t<decltype(arg)>),
+                             sizes[Idx], parm_attr[Idx], {} };
+        }
+      }
+      else
+      {
+        //its flash memory
+        auto is_temp = arg.is_temporary();
+        auto fv = flash_variable{ arg.get_id(), is_temp, 
+                                  std::make_pair(arg.get_prefetch_data(), arg.get_prefetch_size() )
+                                };
+     
+        te = te_variable { reinterpret_cast<void *>( arg.data() ), arg.get_type_size(),
+                           sizes[Idx], parm_attr[Idx], fv };
+        
+      }
+      
+      return te;
+     
+    };
+    
+    _te_vars = std::vector{ (te_conv(I, std::get<I>(tup) ))... };
+                      
   }; 
 
   fill(Indices{});
@@ -168,3 +252,4 @@ void execute_ninput_method( auto& func_ptr, auto& inputs )
   expand_exec( Indices{} );
 
 }
+

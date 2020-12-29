@@ -10,18 +10,24 @@ class FlashableRuntimeFactory
   public : 
    
     using FlashableRuntimeInfo = FlashableRuntimeMeta<IFlashableRuntime>;
+    using map_type = std::map<std::string, FlashableRuntimeInfo>;
 
     FlashableRuntimeFactory() = delete;
 
     static bool Register(const std::string, FlashableRuntimeInfo);
 
     static std::optional<FlashableRuntimeInfo> Create( const std::string &);
+  
+    static map_type& GetRuntimeMap()
+    {
+      static map_type runtimes; 
+      return runtimes;
+    }
 
   private:
 
-    static std::map<std::string, FlashableRuntimeInfo> runtimes; 
+    //static map_type runtimes; 
+
 
 };
-
-
-
+ 

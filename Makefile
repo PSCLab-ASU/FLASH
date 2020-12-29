@@ -7,7 +7,8 @@ BUILD_DIR     := ${CURDIR}/build/${BUILD}/
 export GLOBAL_BUILD_DIR := $(BUILD_DIR)
 
 FLASH_LIB     := $(BUILD_DIR)lib64/libflash_wrapper.so
-FLASH_H       := $(BUILD_DIR)/include/flash.h
+FLASH_H       := $(BUILD_DIR)include/
+FLASH_INC     := flash.h flash_runtime/flash_memory.h flash_runtime/flash_sync.h flash_runtime/flash_part.h
 MAKEFILES_RT  := $(shell find ./*/ -type f -name "Makefile" -not -path "./*/*/*")
 FLASH_VARIANT ?= cpu_runtime
 FLASH_INC_H   := $(CURDIR)/flash_runtime
@@ -52,26 +53,33 @@ runtimes : $(addsuffix .mk, $(MAKEFILES_RT) )
 
 $(addsuffix .mk, $(MAKEFILES_RT) ):
 	@echo global_build_dir = $(GLOBAL_BUILD_DIR)
-	@$(MAKE) -C $(dir $@) all FLASH_VARIANT=$(FLASH_VARIANT) FLASH_BASE=$(CURDIR)
+	@$(MAKE) -C $(dir $@) all FLASH_VARIANT=${FLASH_VARIANT} FLASH_BASE=${CURDIR}
 #####################################################################################
 
 #####################################################################################
 #####################################################################################
 #####################################################################################
 
-move_flash_header : 
-	@echo Copying flash.h...
-	@cp $(CURDIR)/$(notdir $(FLASH_H) ) $(FLASH_H)
+move_flash_header : $(addsuffix .output_h, ${FLASH_INC})
+	@echo Completed copying $^ to ${FLASH_H} ...
+
+
+%.output_h :
+	@echo Copying ${CURDIR}/$(basename $@) ...
+	@cp ${CURDIR}/$(basename $@) ${FLASH_H}
+
+
 
 # Create the build directory and sub dirs on demand.
-create_build_dir : $(dir ${FLASH_LIB} ) $(dir ${FLASH_H} )
+create_build_dir : $(dir ${FLASH_LIB} ) ${FLASH_H} 
 
-$(dir ${FLASH_LIB} ) $(dir ${FLASH_H} ): 
+$(dir ${FLASH_LIB} ) ${FLASH_H} : 
 	@mkdir -p $@
 
 clean:
-	@rm -rf ${build_dir}
+	@echo removing ${BUILD_DIR} ...
+	@rm -rf ${BUILD_DIR}
 
-.PHONY : clean all 
+.PHONY : move_flash_header clean all 
 
 # ==== End rest of boilerplate

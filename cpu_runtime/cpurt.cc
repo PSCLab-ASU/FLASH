@@ -52,25 +52,30 @@ std::shared_ptr<cpu_runtime> cpu_runtime::get_singleton()
 
 cpu_runtime::cpu_runtime()
 {
+  std::cout << __func__ << " : mark 1" << std::endl;
   //get number of cores;
   _core_cnt = std::thread::hardware_concurrency() / 2 ;
   clear_subactions();
 
+  std::cout << __func__ << " : mark 2" << std::endl;
   //auto test = std::jthread(&cpu_runtime::_thread_main, this, stoken);
   auto thread_obj = std::bind( &cpu_runtime::_thread_main, 
                                this, std::placeholders::_1 );
 
+  std::cout << __func__ << " : mark 3" << std::endl;
   for( auto i : std::views::iota((uint)0, _core_cnt) )
   {
     _thread_group.emplace_back( thread_obj );  
   } 
 
+  std::cout << __func__ << " : mark 4" << std::endl;
   std::ranges::transform(_thread_group, std::back_inserter(_thread_group_ids),
 		         std::identity{}, &std::jthread::get_id );
   //ADD ANY LOGIC HERE
 
   //start the thread group
   _thread_start.notify_all();
+  std::cout << __func__ << " : mark 5" << std::endl;
 
 }
 
