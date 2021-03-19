@@ -1,6 +1,6 @@
-# FlashWrapper Introduction
+# FLASH Introduction
 
-The FlashWrapper is a framework that fascilitates the interoperability and portability of application towards hetereogenous accelerators. It decouples the application and allow dynamic dispatch of kernels on different accelerators while minimizing the refactoring efforts of the applications for current and future accelerators. 
+The FLASH is a framework that fascilitates the interoperability and portability of application towards hetereogenous accelerators. It decouples the application and allow dynamic dispatch of kernels on different accelerators while minimizing the refactoring efforts of the applications for current and future accelerators. 
 
 # Building shared object (.so) for default (CPU) Backends
 ```
@@ -83,3 +83,50 @@ Ex.
   Ex g++ main.cc -o host.bin -I./build/include -lflash_wrapper -std=c++2a -ldl -lpthread -rdynamic
 
   *Remember to point LD_LIBRARY_PATH to [dir]/build/lib64
+  
+## Example unit test
+```
+using MATMULT   = KernelDefinition<2, "elmatmult_generic", kernel_t::INT_BIN, float *, float * >;         
+using MATDIV    = KernelDefinition<2, "elmatdiv_generic",  kernel_t::INT_BIN, float*, float*>;            
+using MATDIV_T  = KernelDefinition<2, "TEST::elmatdiv_generic", kernel_t::INT_BIN, TEST*, float*, float*>;
+
+int main(int argc, const char * argv[])                                                     
+{                                                                                           
+    //Design Patterns                                                                       
+    // Lazy execution                                                                       
+    // Builder                                                                              
+    // Lookup                                                                               
+    // Reflection                                                                           
+    // Dynamic dispatching                                                                  
+    // Self-registry factory                                                                
+    size_t sz = 512;                                                                        
+    TEST t1(33);                                                                            
+                                                                                            
+    auto chunk = aligned_vector<float>(6*sz, 2);                                            
+    float * A = chunk.data(), *B = A + sz, *C = B + sz;                                     
+    float * E = C + sz, *F = E + sz, *G = F + sz;                                           
+                                                                                            
+    RuntimeObj ocrt(flash_rt::get_runtime("ALL_CPU") , MATMULT{ argv[0] },                  
+                    MATDIV{argv[0]} );                                                      
+    //submit                                                                                
+    ocrt.submit(MATMULT{}, A, B, C).sizes(sz,sz,sz).defer(32,1,1) 
+        .submit(MATDIV{},  C, F, G).sizes(sz,sz,sz).exec(32,1,1);
+                                                                                                                                                                                   
+    std::cout << "C = ";                                                                    
+    for(auto i : std::views::iota(0,9) )                                                    
+    {                                                                                       
+      std::cout << C[i] << ",";                                                             
+    }                                                                                       
+    std::cout << C[10] << std::endl;                                                        
+                                                                                            
+    std::cout << "G = ";                                                                    
+    for(auto i : std::views::iota(0, 9) )                                                   
+    {                                                                                       
+      std::cout << G[i] << ",";                                                             
+    }                                                                                       
+    std::cout << G[10] << std::endl;                                                        
+                                                                                            
+                                                                                            
+    return 0;                                                                               
+} 
+```
