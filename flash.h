@@ -13,6 +13,7 @@
 #include <any>
 #include <utils/common.h>
 #include <vector>
+#include <tuple>
 #include <flash_runtime/flashrt.h>
 #include <flash_runtime/flash_sync.h>
 #include <flash_runtime/flash_part.h>
@@ -72,6 +73,11 @@ struct SubmitObj
     template<typename _RuntimeImpl, typename _Upstream, typename _ExecParams, typename ... Us>
     friend class RuntimeObj;
 
+    auto operator =(auto rhs)
+    {
+      return rhs;
+    }
+
     template<typename T>
     size_t _get_size( T&& arg );
 
@@ -90,7 +96,7 @@ struct SubmitObj
 
      //start forward execution path
     template<typename ExecParams, typename ... Us>
-    void _forward_exec(ulong, ulong&, ExecParams Params,  Us ... );
+    void _forward_exec(ulong, ulong&, prop_vehicle& , ExecParams Params,  Us ... );
 
     template<typename T> friend class ExecObj;
 
@@ -101,7 +107,8 @@ struct SubmitObj
     ParmPtrs _buffers;
     Parms    _shadow_buffers;
     std::array<size_t, ParmSize > _sizes;
-    std::array<ParmAttr, ParmSize > _bufferAttrs;   
+    std::array<ParmAttr, ParmSize > _bufferAttrs;
+    te_submit_params _submit_prop_var;
 };
 
 
@@ -137,6 +144,11 @@ class RuntimeObj
       }
       else std::cout << "Different types detected" << std::endl;
       std::cout << "RuntimeObj Initialized" << std::endl;
+    }
+
+    auto operator =(auto rhs)
+    {
+      return rhs;
     }
 
     template<size_t I>
@@ -185,6 +197,9 @@ class RuntimeObj
         
         std::cout << __func__ << " : Mark 1" << std::endl;
         sv.reconcile_args( std::forward<Args>(args)... );
+                
+        //fill in _bpv here
+        _fill_prop_variable();
 
         return sv;
     }
@@ -228,6 +243,7 @@ class RuntimeObj
         RuntimeImpl_t               _runtimeImpl;
         Registry_t                  _registry;
 	std::optional<ExecParams_t> _exec_params;
+        te_runtime_params           _runtime_prop_var;
 
         template< size_t N, typename Kernel>
         auto _get_directions( );
@@ -278,11 +294,23 @@ class RuntimeObj
 
         //does nothing in runtime obj
         template<typename ExecParams, typename ... Us>
-        void _forward_exec( ulong tid, ulong& sa_id, ExecParams, Us ... items) {
-            if constexpr (std::is_same_v<NullType, _Upstream>) return;
+        void _forward_exec( ulong tid, ulong& sa_id, prop_vehicle& aggr_bpv, ExecParams, Us ... items) {
+            if constexpr (std::is_same_v<NullType, _Upstream>) 
+            {
+              //processing the propagation chain 
+              //to start the forward probagation
+              _process_prop_vars( prop );
+              return;
+            }
             else
             {
-              if( _upstream ) _upstream->_forward_exec(tid, sa_id, _exec_params.value(), items...);
+              //complete the partial push from the submission object
+              //add the submit_and runtime object to the main vehicle
+              //through overloaded assigment op
+              auto compl_bpv = aggr_bpv + _runtime_prop_var; 
+             
+              if( _upstream ) _upstream->_forward_exec(tid, sa_id, compl_pv, 
+                                                       _exec_params.value(), items...);
               else std::cout << "Could not find upstream" << std::endl;    
             }
             
@@ -372,11 +400,14 @@ ExecObj< SubmitObj<Upstream, Kernel, Parms, ParmPtrs> >
 SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::exec(Us... items)
 {
   std::cout << "Start exec..." << std::endl;
-  ulong subaction_id   = 0;
+  ulong subaction_id = 0;
+
+  //fill in _bpv here
+  _fill_prop_variable();
   //create a unique_id and makes sure thier is no conflicting Id
   ulong transaction_id = flash_rt::get_runtime()->create_transaction();
   //execute kernels from root node, forward
-  _forward_exec(transaction_id, subaction_id, NullType{}, items...);
+  _forward_exec(transaction_id, subaction_id, _bpv, NullType{}, items...);
 
   flash_rt::get_runtime()->process_transaction( transaction_id );
 
@@ -387,6 +418,9 @@ template<typename Upstream, typename Kernel, typename Parms, typename ParmPtrs>
 template<std::unsigned_integral ... Us>
 auto SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::defer(Us... items)
 {
+  //fill in _bpv here
+  _fill_prop_variable();
+
   std::cout << "Defering ... " << std::endl;
   auto func1 = [&]<std::size_t N=std::tuple_size_v<typename Upstream::Registry_t>, typename Indices = std::make_index_sequence<N>>()
   {
@@ -414,11 +448,19 @@ SubmitObj<Upstream, Kernel, Parms, ParmPtrs>& SubmitObj<Upstream, Kernel, Parms,
 
 template<typename Upstream, typename Kernel, typename Parms, typename ParmPtrs>
 template< typename ExecParams, typename ... Us>
-void SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::_forward_exec(ulong trans_id, ulong& subaction_id, ExecParams params, Us ... items )
+void SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::_forward_exec(ulong trans_id, ulong& subaction_id, prop_vehicle& bpv, ExecParams params, Us ... items )
 {  
+  //add sbmission entry //does a partial push
+  //in essence
+  auto prop = bpv + _submit_prop_var;
   //will call prior forward excute until it gets to the root runtime object
   std::optional<NullType> OptNull;
-  _upstream->_forward_exec(trans_id, subaction_id, OptNull, items...);
+  _upstream->_forward_exec(trans_id, subaction_id, prop,  OptNull, items...);
+  //At this point back propagation is complete and forward prop is ready to be consumed//////////////////
+  ///////////////////////////////////////////////////////////////////////////////////////////////////////
+  ////////////////////////recalculate sizes and dependencies
+  _process_prop_vars( prop );
+
   //Executing 
   auto trans_sub_id = std::make_pair(trans_id, subaction_id );
   _upstream->execute(trans_sub_id, _override_kernel, _buffers, _bufferAttrs, _sizes, params, std::make_tuple(items...) );
@@ -432,7 +474,10 @@ template<typename T>
 size_t SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::_get_size( T&& arg )
 {
   if constexpr ( IsContainer<T> || IsAttribute<T> )
-    return arg.size(); 
+  {
+    std::cout << __func__ << " : size : " << arg.size() << std::endl;
+    return arg.size();
+  } 
   else
     return 1;
 }
@@ -466,29 +511,28 @@ template<typename Upstream, typename Kernel, typename Parms, typename ParmPtrs>
 template<typename ... Args>
 void SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::reconcile_args( Args&&... args)
 {
-  int i =0;
-  
+ 
   std::cout << __func__ << " : Mark 1" << std::endl;
   std::vector<ParmAttr > arg_type = 
   { ParmAttr{ IsPointer<decltype(args)>, 
               IsContainer<decltype(args)>, 
               IsAttribute<decltype(args)>, 
-              std::is_rvalue_reference_v<decltype(args)>} ... 
+              std::is_rvalue_reference_v<decltype(args)>  } ... 
   };
+  
+  for( auto parm : arg_type ) 
+    std::cout << "IsContainer : " << parm.is_container << std::endl;	
 
   std::cout << __func__ << " : Mark 2" << std::endl;
   //set default sizes to container size
   sizes( _get_size(args)... );
   // set variable attributes
   std::cout << __func__ << " : Mark 3" << std::endl;
-  _set_buffer_attrs( (args, i++, arg_type.at(i-1) )... );
+  int i = 0;
+  _set_buffer_attrs( (args, arg_type.at(i++) )... );
   //reconcile scalar variables
   std::cout << __func__ << " : Mark 4" << std::endl;
   _set_directionality( );
-
-  //find sizes via containers and offsets
-  std::cout << __func__ << " : Mark 5" << std::endl;
-  _calc_sz_from_contrs( std::forward<Args>(args)...);
 
 }
 
@@ -497,9 +541,20 @@ auto SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::_get_buffer_ptrs() ->
 std::array<std::add_pointer_t<void>, ParmSize >
 {
   std::array<void*, ParmSize > out;
+
+  auto contr_move = [&]<typename T>( T arg ) 
+  { 
+    if constexpr( IsContainer< std::remove_pointer_t<T> > )
+    { 
+      std::cout << __func__ << " : found container " << std::endl;
+      return arg->data();
+    } else return arg;
+  };
+
   auto move = [&]<size_t... I >(std::index_sequence<I...> )
   { 
-    out = { reinterpret_cast<void *>(std::get<I>(_buffers))... };  
+    
+    out = { reinterpret_cast<void *>(contr_move(std::get<I>(_buffers)) )... };  
   };
 
   move( std::make_index_sequence<ParmSize>{} );
@@ -511,34 +566,48 @@ template<typename Upstream, typename Kernel, typename Parms, typename ParmPtrs>
 template<typename ... Args>
 void SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::_calc_sz_from_contrs(Args&&... args)
 {
+  std::cout << __func__ << " : size " <<  _sizes.size() <<  std::endl; 
   size_t arg_cnt = sizeof...(args);
+  auto arg_idx   = std::views::iota(( size_t)0, arg_cnt);
   auto ptr_list = _get_buffer_ptrs( );
-  auto is_container = [&](auto attr_idx) { return _bufferAttrs.at(attr_idx).is_container;  };
 
+  auto is_container = [&](auto attr_idx) { 
+                          auto b =  _bufferAttrs.at(attr_idx).is_container;  
+                          return b;
+                          };
   //calculate sizes based on containers
   //Go through each contrainer variable
-  for( auto contr_idx : std::views::iota((size_t)0, _sizes.size() ) | std::views::filter( is_container ) )
+  for( auto contr_idx : arg_idx | std::views::filter( is_container ) )
   {
-    auto contr_size = _sizes.at(contr_idx);
-    auto contr_ptr  =  ptr_list[contr_idx];
-
-    //then go through each non-container_variable and 
-    //reset the sizes
-    for(auto idx : std::views::iota(( size_t)0, arg_cnt) | 
-                   std::views::filter( unary_equals{contr_idx}) | 
-                   std::views::filter( [&](auto i){ return _bufferAttrs.at(i).is_container; } ) ) 
+    std::cout << __func__ << " : container index : " << contr_idx << std::endl; 
+    auto contr_size  = _sizes.at(contr_idx);
+    auto contr_ptr   =  ptr_list[contr_idx];
+    auto contr_tsize = _bufferAttrs.at(contr_idx).type_size;
+    auto non_contr   = arg_idx | std::views::filter( unary_diff{contr_idx}) | 
+                       std::views::filter( [&](auto i){ return !_bufferAttrs.at(i).is_container; } );
+    std::vector<std::pair<size_t,size_t > > overlap;
+    //////////////////////////////////////////////////////////////////////////////////////////////////////
+    //then go through each non-container_variable and reset the sizes
+    //////////////////////////////////////////////////////////////////////////////////////////////////////
+    for(auto idx : non_contr ) 
     {              
       auto cand_ptr  = ptr_list[idx];
+      ptrdiff_t delta = ( (ptrdiff_t) cand_ptr - 
+                          (ptrdiff_t) contr_ptr ) / contr_tsize; 
       
-      ptrdiff_t delta = (ptrdiff_t) cand_ptr - 
-                        (ptrdiff_t) contr_ptr; 
-
       if( (contr_ptr < cand_ptr) && (delta < contr_size)  )
       {
         _sizes.at(idx) = contr_size - delta;
+        overlap.push_back( {idx, _sizes.at(idx) } );
+        std::cout << __func__ << " : container size : " << contr_size << " : " 
+                  << idx << " : " << _sizes.at(idx) << std::endl; 
       }
           
     }
+    //////////////////////////////////////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////////////////////////
+    std::ranges::sort( overlap, {}, &decltype(overlap)::value_type::second ); 
+    
   } 
 }
 
