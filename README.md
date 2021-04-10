@@ -1,6 +1,8 @@
-# FlashWrapper Introduction
+# FLASH Introduction
+As more accelerator platforms become increasingly domain-specific and widely available, HPC developers are faced with the problem of perpetual refactoring of application codes in order to continue making ground-breaking science practical. Code refactoring often requires a large amount of time and expertise on behalf of an HPC developers to understand the new accelerator hardware, runtime interfaces, and the application architecture. As a result, frameworks for improving code portability have taken the center stage as a mean to reduce the amount of code refactoring effort necessary to facilitate the adoption of new hardware accelerators in HPC. Moreover, with the performance of general-purpose computing quickly plateauing, HPC software solutions must look toward more application- and domain-specific accelerators (ASAs/DSAs) to reach the next notable milestones in performance. This will undoubtedly increase the cadence of code refactoring to an impractical level with existing solutions, and more so, without. 
 
-The FlashWrapper is a framework that fascilitates the interoperability and portability of application towards hetereogenous accelerators. It decouples the application and allow dynamic dispatch of kernels on different accelerators while minimizing the refactoring efforts of the applications for current and future accelerators. 
+FLASH 1.0 is a software framework forrapid parallel deployment and enhancing host code portability inheterogeneous computing. FLASH 1.0 is a C++-based frameworkthat critically serves as a clear way-point for separating hardware-agnostic and hardware-specific logic to facilitate code portabil-ity. FLASH 1.0 uses variadic templates andmixinidioms based interfaces as the primary vehicle to enable a simple, extensiblehardware-agnostic interfaces easily supportable by legacy and future accelerators of various architectures. FLASH 1.0 consists of four major components the frontend (host and kernel)and backend interfaces and the frontend and backend runtimes to enable extensibility and portability.
+
 
 # Building shared object (.so) for default (CPU) Backends
 ```
@@ -83,3 +85,50 @@ Ex.
   Ex g++ main.cc -o host.bin -I./build/include -lflash_wrapper -std=c++2a -ldl -lpthread -rdynamic
 
   *Remember to point LD_LIBRARY_PATH to [dir]/build/lib64
+  
+## Example unit test
+```
+using MATMULT   = KernelDefinition<2, "elmatmult_generic", kernel_t::INT_BIN, float *, float * >;         
+using MATDIV    = KernelDefinition<2, "elmatdiv_generic",  kernel_t::INT_BIN, float*, float*>;            
+using MATDIV_T  = KernelDefinition<2, "TEST::elmatdiv_generic", kernel_t::INT_BIN, TEST*, float*, float*>;
+
+int main(int argc, const char * argv[])                                                     
+{                                                                                           
+    //Design Patterns                                                                       
+    // Lazy execution                                                                       
+    // Builder                                                                              
+    // Lookup                                                                               
+    // Reflection                                                                           
+    // Dynamic dispatching                                                                  
+    // Self-registry factory                                                                
+    size_t sz = 512;                                                                        
+    TEST t1(33);                                                                            
+                                                                                            
+    auto chunk = aligned_vector<float>(6*sz, 2);                                            
+    float * A = chunk.data(), *B = A + sz, *C = B + sz;                                     
+    float * E = C + sz, *F = E + sz, *G = F + sz;                                           
+                                                                                            
+    RuntimeObj ocrt(flash_rt::get_runtime("ALL_CPU") , MATMULT{ argv[0] },                  
+                    MATDIV{argv[0]} );                                                      
+    //submit                                                                                
+    ocrt.submit(MATMULT{}, A, B, C).sizes(sz,sz,sz).defer(32,1,1) 
+        .submit(MATDIV{},  C, F, G).sizes(sz,sz,sz).exec(32,1,1);
+                                                                                                                                                                                   
+    std::cout << "C = ";                                                                    
+    for(auto i : std::views::iota(0,9) )                                                    
+    {                                                                                       
+      std::cout << C[i] << ",";                                                             
+    }                                                                                       
+    std::cout << C[10] << std::endl;                                                        
+                                                                                            
+    std::cout << "G = ";                                                                    
+    for(auto i : std::views::iota(0, 9) )                                                   
+    {                                                                                       
+      std::cout << G[i] << ",";                                                             
+    }                                                                                       
+    std::cout << G[10] << std::endl;                                                        
+                                                                                            
+                                                                                            
+    return 0;                                                                               
+} 
+```
