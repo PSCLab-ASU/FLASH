@@ -22,19 +22,23 @@ void init( std::string backend)
 }
 
 template<typename kernel_handles>
-kernel_handles init_kernels(backend, strings kernels)
+kernel_handles init_kernels(backend, device_qs, strings kernels)
 {
+  //This function also explodes
   initialize kernels
   switch pair( backend, kernels)
-    for each kernel in kernels
-      init kernel
+    for_each valid device_q
+      for each kernel in kernels
+        init kernel
 }
 
 
 template<typename ... Ts, typename ...Us, typename Ins, typename Outs>
-auto prepare_args( backend, Ins ins, Outs outs)
+auto prepare_args( backend, kintf, Ins ins, Outs outs)
 {
-  switch backend
+  //this method EXPLODES as well
+  switch pair(backend, kintf)
+  //need device knowledge to allocate buffer on correct device
   //allocat host and device  parameters 
   
 }
@@ -42,8 +46,11 @@ auto prepare_args( backend, Ins ins, Outs outs)
 template<typename ... Ts, typename ...Us, typename Ins, typename Outs>
 void launch_kernel(backend, kintfs, std::string kernel_name, Ins<Ts...> ins, Outs<Us...> outs)
 {
+  //this launch code logic explodes if you had to handle multiple heteregenous accelerators
+  //keeping track of 4 accelerators and load balancing is a hassle
   switch backend
-    //launch kernel with coressponding kernel intf interfaces
+    decide which kernelintf queue to deploy on
+      //launch kernel with coressponding using the corresponding kernel interface( including queue)
     
 }
  
@@ -55,7 +62,7 @@ lambdas construct_pipeline(backends, kintfs, strings kernel_names)
     switch case kernel:
       input_tuple = make_tuple(Arg1, Arg2, ArgN...);
       output_tuple = make_tuple(ArgN, ArgN+1, ArgN+M...);
-      prepare_args(backend, input_tuple, output_tuple);
+      prepare_args(backend, kintf, input_tuple, output_tuple);
 
       auto exec = [&]( Dims dims ) 
       {
@@ -63,7 +70,7 @@ lambdas construct_pipeline(backends, kintfs, strings kernel_names)
 
         process_output(backend, kintf, kernel_name, kintf, out);
 
-        dealloc( backend, kernel, ins, out );
+        dealloc( backend, kintf, kernel, ins, out );
       }; 
 
      lambdas.push_back( exec );         
@@ -73,13 +80,15 @@ lambdas construct_pipeline(backends, kintfs, strings kernel_names)
 template<typename Outs>
 void process_output( backend, kintf, string kernel_name, Outs outs)
 {
+  //this function does EXPLODE too bad
   switch on pair(backend, kernel_name)
-    process output using kintf
+    process output using kintf and the device queues
+
 }
 
-dealloc( backend, kernel, ins, out )
+dealloc( backend, kintf, kernel, ins, out )
 {
-  switch on backend
+  switch on pair(backend, kintf)
     //deallocate buffer
 }
 
@@ -97,16 +106,28 @@ int classic_main(int argc, char * argv[] )
   //For performance sake hip may provide better performance than thrust (or vice-verse)
   //and similarly with opencl,
   //the others are device specific highly optimized frameworks, libraires for programmign models.
-
-  cuda_t kernels1   = init_kernels(cuda, kernels);           //programming model
-  opencl_t kernels2 = init_kernels(opencl, kernels);         //programming model
-  hip_t kernels3    = init_kernels(hip, kernels);            //portability framework
-  thrust_t kernels4 = init_kernels(thrust, kernels);         //portability framework 
-  mkl_t kernels5    = init_kernels(mkl, kernels);            //CPU accelerator library
-  dl_t  kernels6    = init_kernels(deep_learning, kernels);  //deep learning accelerator
+  
+  devices = get_list_of_accelerators()
 
   //tuple all kerel interfaces
   auto tup_kintf( kernels1, kernels2, kernels3, kernels4...);   
+
+  for each device_set in power_set(devices)
+    if valid set create (backend, queue) map
+
+  for each valid (backend, queue)  in queue_map:
+    intitialize kernel interfces...
+    switch on backend to  initialize kernel interfaces
+      cuda_t kernels1   = init_kernels(cuda, devices, kernels);            //programming model
+      opencl_t kernels2 = init_kernels(opencl, devices, kernels);          //programming model
+      hip_t kernels3    = init_kernels(hip, devices, kernels);             //portability framework
+      thrust_t kernels4 = init_kernels(thrust, devices, kernels);          //portability framework 
+      mkl_t kernels5    = init_kernels(mkl, devices, kernels);             //CPU accelerator library
+      dl_t  kernels6    = init_kernels(deep_learning, devices,  kernels);  //deep learning accelerator
+
+    //push kernel intf to tuple vector
+    std::get<cuda_t or opencl_t...etc >( tup_kintf).push_back(kernels1, or kernels2...etc_);
+
 
   auto stages = construct_pipeline(backends, tup_kintf, kernels);
 
@@ -150,6 +171,7 @@ int flash_main( int argc, char * argv[])
   string  impls   = {argv[0], argv[1], argv[2], argvr[3] };  
 
   //initializing kernel repo
+  //FLASH handles the quantity of any given type of accelerator and LOAD BALANCES accordingly
   init_flash_kernels(kernels, impls);
 
   RuntimeObj ocrt;
@@ -160,7 +182,8 @@ int flash_main( int argc, char * argv[])
 
   //notice that the RuntimeObj no longer has to register the kernels for a piece of code to use
   //the acceleration.
-  //HUGE NOTE: notice that this code is accelerator agnostic! And devoid of any API specific details/constructs
+  //IMPORTANT NOTE: FLASH finds a valid accelator (or sets of accelerators) to run the computation.
+  //HUGE NOTE: notice that this code not only maintains accelerator independence, it also brokers device usage transparently.
   //Additionally, RuntimeObj's now hold a repository off all launchable kernels in the program for the life of the application
   //the kernels are associated with thier runtimes without application awareness
 }
