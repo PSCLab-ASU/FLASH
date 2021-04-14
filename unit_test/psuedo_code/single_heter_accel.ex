@@ -137,7 +137,7 @@ void init_flash_kernels(strings kernels, strings impls )
   //After the first time in the loop MatrixMult will be discovered, and subsequent loop iteration be ignored.
   
   for each pair(kernels, impls)
-    RuntimeObj ocrt(flash_rt::get_runtime("ALL") , 2PARM_DECL{kernel, impl }, MatrixMult{} ... );
+    RuntimeObj ocrt(flash_rt::get_runtime("NVIDIA_GPU") , 2PARM_DECL{kernel, impl }, MatrixMult{} ... );
 
   
 }
