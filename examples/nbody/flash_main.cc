@@ -23,7 +23,7 @@ struct Particles
 
   size_t n_particles;
  
-  Particles( );
+  Particles(size_t );
   
 
 };
@@ -38,7 +38,7 @@ Particles::Particles(size_t n_parts)
   //since PARTICLE_K was registered by the RuntimeObj in main the backend will have
   //a cahced version of PartivleInit
   //since the sumbission kernel description (parameter 1) doesn't override a kernel mehtod
-  //it by default uses the one definied in the using statement "ParticleIit"
+  //it by default uses the one definied in the using statement "Particleit"
   //since no runtime was passed it will choose the runtime based on 
   //a) where the bulk of the input presides, moving the device buffer accordingly
   //b) where there is a valid kernel to execute
