@@ -15,7 +15,7 @@ void _update_particle_accel(float *, float, float * , float&, float&, float& );
 void _calc_energy(  float, float *, float *, float *, float& );
 
 
-void particle_init( float * mass, float ** positions, float ** velocities, float ** accelerations, size_t ** ttable)
+void particle_init( unsigned long, float * mass, float ** positions, float ** velocities, float ** accelerations, size_t ** ttable)
 {
   std::random_device rd;
   std::mt19937 gen(42);

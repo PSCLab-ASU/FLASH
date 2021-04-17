@@ -1,3 +1,4 @@
+#include <iostream>
 #include <vector>
 #include <flash.h>
 
@@ -18,6 +19,8 @@ struct Particles
   flash_memory<float[3]> vels;
   flash_memory<float[3]> accs;
   flash_memory<float>    mass;
+  float energy;
+
   size_t n_particles;
  
   Particles( );
@@ -62,7 +65,7 @@ int main(int argc, const char * argv[])
     //two steps in the 'y' dimension with an implicit barrier
     //and those repeated 10 times
     //flash memory is used to bypass the host write back from the initalization stage
-    ocrt.submit(PARTICLE_K{"process_particles"}, n_particles, ps.mass, ps.pos, ps.vel, ps.acc )
+    ocrt.submit(PARTICLE_K{"process_particles"}, n_particles, ps.mass, ps.pos, ps.vel, ps.acc, &ps.energy )
         .exec(n_particles, y_stages, time_steps);
 
     //Read new positionaa
@@ -74,6 +77,8 @@ int main(int argc, const char * argv[])
       std::cout << "z = " << part_pos[2] << std::endl;
  
     }
+
+    std::cout << "Total energy : " << ps.energy << std::endl;
 
 
     return 0;
