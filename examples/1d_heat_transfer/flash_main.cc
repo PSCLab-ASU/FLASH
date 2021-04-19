@@ -35,7 +35,7 @@ int main(int argc, const char * argv[])
     //data() method returns a std::vector and implicitly and transfer the
     //entre device buffer to host
     auto& points = arr.data();
-    std::cout << "Points : " << ps.energy << std::endl;
+    std::cout << "Points : " << points.size() << std::endl;
     std::ranges::copy(points, std::ostream_iterator<int>(std::cout, " "));
 
     return 0;
