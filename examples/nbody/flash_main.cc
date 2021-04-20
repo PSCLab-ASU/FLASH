@@ -55,7 +55,7 @@ int main(int argc, const char * argv[])
    
     size_t n_particles=16000, y_stages=2, time_steps=10;
 
-    RuntimeObj ocrt(flash_rt::get_runtime("NVIDIA_GPU") , PARTICLE_K{ argv[0] } );
+    RuntimeObj ocrt(flash_rt::get_runtime("NVIDIA_GPU") , PARTICLE_K{ argv[1] } );
 
     //Intitializing is also acclerated by accelerators
     Particles ps(n_particles);

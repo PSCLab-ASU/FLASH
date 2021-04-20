@@ -6,7 +6,7 @@
 
 //Adapted for FLASH from https://github.com/oneapi-src/oneAPI-samples.git
 //DirectProgramming/DPC++/N-BodyMethods/Nbody                                          //In      In        In      Inout   Inout  Inout
-                                                                                       //GridSz  //ranX  //ranY  //PosX  //PosY   //grid
+                                                                                       //GridSz  //grid  //posX  //PosY  //RanX   //RanY
 using PARTICLE_K = KernelDefinition<2, "particle_init",  kernel_t::EXT_BIN, Sortby<2>, ulong, float*, float*, float*, float*, float* >; 
 
 
@@ -68,7 +68,7 @@ int main(int argc, const char * argv[])
     ulong grid_size=22, planes=3;
     size_t n_particles=256, n_iter=10000;
 
-    RuntimeObj ocrt(flash_rt::get_runtime("NVIDIA_GPU") , PARTICLE_K{ argv[0] } );
+    RuntimeObj ocrt(flash_rt::get_runtime("NVIDIA_GPU") , PARTICLE_K{ argv[1] } );
 
     //Intitializing is also acclerated by accelerators
     Particles ps(n_particles, n_iter, grid_sz, planes);

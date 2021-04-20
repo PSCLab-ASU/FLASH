@@ -29,6 +29,8 @@ void particle_init( unsigned long, float * mass, float ** positions, float ** ve
   positions[x][1] = unif_d(gen);
   positions[x][2] = unif_d(gen);
 
+  mass[x] = 10 * unif_d(gen);
+
   unif_d = std::uniform_real_distribution<float>( -1.0, 1.0 );
 
   velocities[x][0] = unif_d(gen) * base_unit;  

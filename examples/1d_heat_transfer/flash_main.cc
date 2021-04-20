@@ -18,7 +18,7 @@ int main(int argc, const char * argv[])
     flash_memory<float> arr(n_points+2);
     flash_memory<float> arr_next(n_points+2);
 
-    RuntimeObj ocrt(flash_rt::get_runtime("ALL_CPU") , HEAT_TRANSFER_K{ argv[0] } );
+    RuntimeObj ocrt(flash_rt::get_runtime("ALL") , HEAT_TRANSFER_K{ argv[1] } );
 
     //Create pipeline
     //first submit is a default kernel 'init', then the
