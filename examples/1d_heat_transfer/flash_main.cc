@@ -8,7 +8,7 @@
 //Adapted for FLASH from https://github.com/oneapi-src/oneAPI-samples.git
 //DirectProgramming/DPC++/StructuredGrids/1d_HeatTransfer/src
                                                                            
-using HEAT_TRANSFER_K = KernelDefinition<1, "init", kernel_t::EXT_BIN, SortBy<2>, unsigned long,  float*, float* >; 
+using HEAT_TRANSFER_K = KernelDefinition<1, "init", kernel_t::EXT_BIN, GroupBy<2>, unsigned long,  float*, float* >; 
 
 
 int main(int argc, const char * argv[])

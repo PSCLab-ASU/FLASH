@@ -8,7 +8,7 @@
 //DirectProgramming/DPC++/N-BodyMethods/Nbody                                  In      In      Inout   Inout  Inout
                                                                                //grid  //posX  //PosY  //RanX   //RanY
 using PARTICLE_K  = KernelDefinition<0, "particle_init",    kernel_t::EXT_BIN, size_t *, float*, float*, float*, float* >; 
-using PARTICLE_K2 = KernelDefinition<3, "process_particle", kernel_t::EXT_BIN, Sortby<2>, ulong, size_t, float, flash_memory<uint>, 
+using PARTICLE_K2 = KernelDefinition<3, "process_particle", kernel_t::EXT_BIN, Groupby<2>, ulong, size_t, float, flash_memory<uint>, 
                                                                             size_t*, float*, float*, float*, float* >; 
 
 struct Particles

@@ -5,7 +5,7 @@
 //Adapted for FLASH from https://github.com/oneapi-src/oneAPI-samples.git
 //DirectProgramming/DPC++/N-BodyMethods/Nbody
                                                                                        //in   //in    //inout   //inout  //inout
-using PARTICLE_K = KernelDefinition<2, "particle_init",  kernel_t::EXT_BIN, Sortby<2>, ulong, float*, float**,  float**, float** >; 
+using PARTICLE_K = KernelDefinition<2, "particle_init",  kernel_t::EXT_BIN, Groupby<2>, ulong, float*, float**,  float**, float** >; 
 
 
 struct Particles
