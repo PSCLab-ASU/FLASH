@@ -133,7 +133,7 @@ int main(int argc, const char * argv[])
 } 
 ```
 
-# nbody and particle diffusion kernel unit tests can be compiled with the following command lines:
+## nbody and particle diffusion kernel unit tests can be compiled with the following command lines:
 (CPU)
 nvcc cpu_main.cc cpu_kernels.cc -o particle-diffusion.cpu -std=c++11
 nvcc cpu_main.cc cpu_kernels.cc -o nbody.cpu -std=c++11
