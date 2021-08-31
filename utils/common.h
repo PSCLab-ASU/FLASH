@@ -18,7 +18,28 @@
 #define EXPORT __attribute__((visibility("default")))
 
 struct NullType {};
-struct Attr {};
+struct FlashIgnore {};
+
+enum {KATTR_SORTBY_ID=0, KATTR_GROUPBY_ID, KATTR_FMEM_ID };
+
+struct Attr {
+  
+  Attr(int id ) : _attrId(id) {}
+
+  int get_id(){ return _attrId;}
+
+  void set_generic_vals(  std::vector<size_t> new_vals )
+  {
+    _generic_values = new_vals;
+  }
+
+  std::vector<size_t> get_gen_vals() { return _generic_values; }
+
+  int _attrId;
+
+  std::vector<size_t> _generic_values;
+
+};
 
 enum struct DIRECTION { IN, INOUT, OUT };
 enum struct MEM_MOVE { TO_DEVICE, TO_HOST };
@@ -36,12 +57,13 @@ struct ParmAttr{
 template< typename T>
 concept IsAttribute = std::is_base_of_v<Attr, T>;
 
-template<typename T>
-concept IsContainer = requires (T a){
-  typename T::value_type;
-  { a.data() } -> std::same_as<std::add_pointer_t<typename T::value_type> >;
+template<typename T, typename U=std::remove_reference_t<T> >
+concept IsContainer = requires (U a){
+  typename U::value_type;
+  { a.data() } -> std::same_as<std::add_pointer_t<std::remove_reference_t<typename U::value_type> > >;
   a.size();
 };
+
 
 template<typename T>
 concept IsPointer = std::is_pointer_v<std::decay_t<T> > &&
@@ -60,11 +82,14 @@ using override_kernel_t = std::pair<
 template<size_t I>
 using expand_void = void *;
 
+struct te_attr;
+
 struct runtime_vars
 {
   std::string lookup;
   std::optional<std::string> kernel_name_override;
   std::optional<std::string> kernel_impl_override;
+  std::vector<te_attr> kAttrs;
   std::pair<ulong, ulong> trans_subaction_id;
 
   std::string get_lookup(){ return lookup; } 
@@ -103,6 +128,14 @@ struct unary_equals{
   T _val;
 };
 
+template<typename T>
+struct unary_diff{
+
+  bool operator()(T v){ return v != _val; }
+
+  T _val;
+};
+
 struct status {
   int err;
   std::optional<ulong> work_id;
@@ -137,8 +170,18 @@ struct te_variable
 };
 
 
+struct te_attr
+{
+  int id;
+  std::vector<size_t> dims;
+  void(*part)( std::vector<size_t> );
+  
+};
+
+
 template<typename ... Ts, size_t N = sizeof...(Ts), typename Indices = std::make_index_sequence<N> >
-std::vector<te_variable> erase_tuple( std::tuple<Ts...>& tup,  std::array<ParmAttr, N> parm_attr, std::array<size_t, N> sizes )
+std::vector<te_variable> erase_tuple( std::tuple<Ts...>& tup,  std::array<ParmAttr, N> parm_attr, 
+                                      std::array<size_t, N> sizes )
 {
   /* important note: tup is being passed by reference becayse the parameters are being converted to pointers
    * and must live after this function retruns */  

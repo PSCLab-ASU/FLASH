@@ -96,7 +96,7 @@ struct SubmitObj
 
      //start forward execution path
     template<typename ExecParams, typename ... Us>
-    void _forward_exec(ulong, ulong&, prop_vehicle& , ExecParams Params,  Us ... );
+    void _forward_exec(ulong, ulong&,  ExecParams Params,  Us ... );
 
     template<typename T> friend class ExecObj;
 
@@ -108,11 +108,10 @@ struct SubmitObj
     Parms    _shadow_buffers;
     std::array<size_t, ParmSize > _sizes;
     std::array<ParmAttr, ParmSize > _bufferAttrs;
-    te_submit_params _submit_prop_var;
 };
 
 
-template<typename _RuntimeImpl, typename _Upstream = NullType, typename _ExecParams = NullType, typename ... Ts>
+template<typename _RuntimeImpl = std::shared_ptr<flash_rt>, typename _Upstream = NullType, typename _ExecParams = NullType, typename ... Ts>
 class RuntimeObj 
 {
   public :
@@ -120,6 +119,13 @@ class RuntimeObj
     using Registry_t    = std::tuple<Ts...>;
     using RuntimeImpl_t = _RuntimeImpl;
     using ExecParams_t  = _ExecParams;
+
+
+    //Thei ctor will allow host code to utilize any implementation avaiable for
+    //a specific kernel
+    RuntimeObj()
+    : _runtimeImpl(flash_rt::get_runtime("ALL") ) {}
+    
 
     //constructor without upstream
     explicit  RuntimeObj(RuntimeImpl_t impl, Ts&& ... ts)
@@ -190,17 +196,12 @@ class RuntimeObj
         //the _scalar_parm_conv uses ra_Value check to create the 
         //shadow regideter types, 
         //all l-values are converterd to pointers 
-        std::cout << __func__ << " : Mark 0" << std::endl;
         auto sv = SubmitObj(*this, kernel_def, 
                             std::make_tuple( _scalar_parm_conv(std::forward<Args>(args))... ),
                             std::make_tuple( _scalar_parm_conv(args)... ) );
         
-        std::cout << __func__ << " : Mark 1" << std::endl;
         sv.reconcile_args( std::forward<Args>(args)... );
                 
-        //fill in _bpv here
-        _fill_prop_variable();
-
         return sv;
     }
  
@@ -243,7 +244,6 @@ class RuntimeObj
         RuntimeImpl_t               _runtimeImpl;
         Registry_t                  _registry;
 	std::optional<ExecParams_t> _exec_params;
-        te_runtime_params           _runtime_prop_var;
 
         template< size_t N, typename Kernel>
         auto _get_directions( );
@@ -252,64 +252,56 @@ class RuntimeObj
         void execute(auto trans_sub_id, Kernel kernel, P buffers, PA buffer_attrs,
                      auto sizes, ExecParams successor_params, I exec_items )
         {
+            std::vector<size_t> exec_params;
+
             size_t num_inputs = Kernel::Get_NInArgs() + 
                                 Kernel::Get_NInOutArgs();
             //std::cout << "Executing " << kernel_id << "..." << std::endl;
-            //constexpr size_t NArgs = std::tuple_size_v<P>;
+            constexpr size_t NArgs = std::tuple_size_v<P>;
            
-            //auto directions  = _get_directions<NArgs, Kernel>( );
-            
+            auto _te_buffers = erase_tuple( buffers, buffer_attrs, sizes );            
+
             auto _rt_vars    = runtime_vars{ kernel.get_method(),
                                              kernel.get_method_ovr(),
-                                             kernel.get_kernel_details() };
-            auto _te_buffers = erase_tuple( buffers, buffer_attrs, sizes );
+                                             kernel.get_kernel_details(),
+                                             kernel.simplify_kattrs()  };
 
 	    //set transactio information
             _rt_vars.associate_transactions( trans_sub_id );
 
+
 	    if constexpr ( std::is_same_v<ExecParams, NullType>  )
 	    {
+              std::cout << "Exec : ";
               auto arr = get_array_from_tuple( exec_items );
-	      auto exec_parms  = std::vector<size_t>( arr.begin(), arr.end() );
-
-	      std::cout << "Exec : ";
-	      std::ranges::copy(exec_parms, std::ostream_iterator<size_t>{std::cout, ", "} );
-	      std::cout << std::endl;
-
-              _runtimeImpl->execute( _rt_vars, num_inputs, _te_buffers, exec_parms, options{}); 
-	    }
-	    else
-	    {
+	      exec_params  = std::vector<size_t>( arr.begin(), arr.end() );
+            }
+            else
+            {
+              std::cout << "Defer : ";
               auto arr = get_array_from_tuple( successor_params );
-	      auto exec_parms  = std::vector<size_t>( arr.begin(), arr.end() );
+	      exec_params  = std::vector<size_t>( arr.begin(), arr.end() );
+            }
 
-	      std::cout << "Defer : ";
-	      std::ranges::copy(exec_parms, std::ostream_iterator<size_t>{std::cout, ", "} );
-	      std::cout << std::endl;
+            
+	    std::ranges::copy(exec_params, std::ostream_iterator<size_t>{std::cout, ", "} );
+	    std::cout << std::endl;
 
-              _runtimeImpl->execute( _rt_vars, num_inputs, _te_buffers, exec_parms, options{}); 
-	    }
+            _runtimeImpl->execute( _rt_vars, num_inputs, _te_buffers, exec_params, options{}); 
             //money maker: this function will interface with the runime Object
         }
 
         //does nothing in runtime obj
         template<typename ExecParams, typename ... Us>
-        void _forward_exec( ulong tid, ulong& sa_id, prop_vehicle& aggr_bpv, ExecParams, Us ... items) {
+        void _forward_exec( ulong tid, ulong& sa_id, ExecParams, Us ... items) 
+        {
             if constexpr (std::is_same_v<NullType, _Upstream>) 
             {
-              //processing the propagation chain 
-              //to start the forward probagation
-              _process_prop_vars( prop );
               return;
             }
             else
             {
-              //complete the partial push from the submission object
-              //add the submit_and runtime object to the main vehicle
-              //through overloaded assigment op
-              auto compl_bpv = aggr_bpv + _runtime_prop_var; 
-             
-              if( _upstream ) _upstream->_forward_exec(tid, sa_id, compl_pv, 
+              if( _upstream ) _upstream->_forward_exec(tid, sa_id,
                                                        _exec_params.value(), items...);
               else std::cout << "Could not find upstream" << std::endl;    
             }
@@ -377,20 +369,15 @@ SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::SubmitObj(Upstream upst,
 {
     _upstream = upst;
 
-    std::cout << "Mark 1" << std::endl;
     _override_kernel = dynamic_override;
 
-    std::cout << "Mark 2" << std::endl;
     //root value holders
     _shadow_buffers = parms;
     //pointer holders
-    std::cout << "Mark 3" << std::endl;
     _buffers = parm_ptrs;
 
-    std::cout << "Mark 4" << std::endl;
     _update_parm_ptrs< std::tuple_size_v<ParmPtrs> >( );
 
-    std::cout << "Mark 5" << std::endl;
     _sizes.fill(1);
 }
 
@@ -402,12 +389,10 @@ SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::exec(Us... items)
   std::cout << "Start exec..." << std::endl;
   ulong subaction_id = 0;
 
-  //fill in _bpv here
-  _fill_prop_variable();
   //create a unique_id and makes sure thier is no conflicting Id
   ulong transaction_id = flash_rt::get_runtime()->create_transaction();
   //execute kernels from root node, forward
-  _forward_exec(transaction_id, subaction_id, _bpv, NullType{}, items...);
+  _forward_exec(transaction_id, subaction_id, NullType{}, items...);
 
   flash_rt::get_runtime()->process_transaction( transaction_id );
 
@@ -418,9 +403,6 @@ template<typename Upstream, typename Kernel, typename Parms, typename ParmPtrs>
 template<std::unsigned_integral ... Us>
 auto SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::defer(Us... items)
 {
-  //fill in _bpv here
-  _fill_prop_variable();
-
   std::cout << "Defering ... " << std::endl;
   auto func1 = [&]<std::size_t N=std::tuple_size_v<typename Upstream::Registry_t>, typename Indices = std::make_index_sequence<N>>()
   {
@@ -448,18 +430,11 @@ SubmitObj<Upstream, Kernel, Parms, ParmPtrs>& SubmitObj<Upstream, Kernel, Parms,
 
 template<typename Upstream, typename Kernel, typename Parms, typename ParmPtrs>
 template< typename ExecParams, typename ... Us>
-void SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::_forward_exec(ulong trans_id, ulong& subaction_id, prop_vehicle& bpv, ExecParams params, Us ... items )
+void SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::_forward_exec(ulong trans_id, ulong& subaction_id, ExecParams params, Us ... items )
 {  
-  //add sbmission entry //does a partial push
-  //in essence
-  auto prop = bpv + _submit_prop_var;
   //will call prior forward excute until it gets to the root runtime object
   std::optional<NullType> OptNull;
-  _upstream->_forward_exec(trans_id, subaction_id, prop,  OptNull, items...);
-  //At this point back propagation is complete and forward prop is ready to be consumed//////////////////
-  ///////////////////////////////////////////////////////////////////////////////////////////////////////
-  ////////////////////////recalculate sizes and dependencies
-  _process_prop_vars( prop );
+  _upstream->_forward_exec(trans_id, subaction_id, OptNull, items...);
 
   //Executing 
   auto trans_sub_id = std::make_pair(trans_id, subaction_id );
@@ -499,7 +474,7 @@ void  SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::_set_directionality()
 
   auto out_it = _bufferAttrs.begin();
  
-  static_assert((N < NArgs), "Not enough Parameters to submit kernel" );
+  static_assert((N >= NArgs), "Not enough Parameters to submit kernel" );
 
   using namespace std::ranges; 
   for_each_n(std::next(out_it, 0),       NInArgs,    [](auto& attr) { attr.dir = DIRECTION::IN;    } );
@@ -652,30 +627,82 @@ struct KernelDefinition
       return NumPureInputs;
     }
 
+    static constexpr size_t Get_NAttrs() {
+      return std::tuple_size_v<decltype(_attrs)>;
+    }
+
     static constexpr size_t Get_NInOutArgs() {
-      return _calc_num_inputs();
+      return Get_NArgs() - (Get_NInArgs() + Get_NAttrs() );
     }
 
-    static constexpr size_t _calc_num_inputs(){
-      size_t i=0;
-      constexpr size_t N = sizeof...(Ts);
-      //using Indices = std::make_index_sequence<N>;
+    std::vector<te_attr> simplify_kattrs()
+    {
+      constexpr size_t n_attr = std::tuple_size_v<decltype(_attrs)>;
 
-      auto calc = [&]<std::size_t... I >(std::index_sequence<I...> )
+      auto conv = [&]<size_t... I>(std::index_sequence<I...> )
       {
-        bool boolvec[N] = { IsAttribute< 
-                              std::remove_pointer<
-                                std::tuple_element_t<I, input_ts> > >... };
-        for( auto b : boolvec) if( !b ) i++;
+         std::vector<te_attr> out = { te_attr
+                                      {
+                                       std::get<I>(_attrs).get_id(),
+                                       std::get<I>(_attrs).get_gen_vals()
+                                      }...
+                                    }; 
+         return out;
       };
-      calc( std::make_index_sequence<N>{} );
 
-      return i;
+      return conv( std::make_index_sequence<n_attr>{} );
+
     }
 
+    private:
 
-    kernel_t_decl<k_type> _input_program;
-    std::optional<std::string> _kernel_name;
+      template<size_t N, typename T, typename ... Us>
+      struct sub_type_list
+      {
+        static constexpr int accumulate( )
+        {
+          if constexpr( IsAttribute<T> ) return sub_type_list<K, Us...>::accumulate( );
+          else return N;
+        }
 
+        static constexpr int K = N + 1;
+      };
+
+      template<typename... Us>
+      struct attr_list
+      { 
+        using args = std::tuple<Us...>;
+
+        static constexpr int attr_n = sub_type_list<0, Us...>::accumulate();
+           
+        static constexpr auto create_default_attr_tuple()
+        {
+          auto calc = [&]<size_t... I >(std::index_sequence<I...> )
+          {
+            return std::tuple<std::tuple_element_t<I, args>...>{};
+          };
+
+          auto  ret = calc( std::make_index_sequence<attr_n>{} );
+          return ret;
+        }
+        
+        static constexpr auto create()
+        { 
+          return create_default_attr_tuple();
+        }
+ 
+      };
+
+
+      decltype(auto) get_attrs() 
+      {
+        return (_attrs); 
+      }
+
+
+      decltype( attr_list<Ts...>::create() ) _attrs;
+      //static auto _attrs  = attr_list<Ts...>::create();
+      kernel_t_decl<k_type> _input_program;
+      std::optional<std::string> _kernel_name;
 };
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////a

@@ -12,46 +12,48 @@ struct sort_by : Attr
   using static_dims_t  = std::array<size_t, N>;
   using dynamic_dims_t = std::vector<size_t>;
 
-  template<typename ... Us>
-  constexpr sort_by(Us ... dims)
+  template<size_t ... DDims>
+  constexpr sort_by(std::vector<size_t> dims = {DDims...} )
+  : Attr( KATTR_SORTBY_ID )
   {
-    if constexpr( sizeof...(Us) != N)
-    {
-      _dims = dynamic_dims_t{dims...};
-    }
-  }
 
-  //static   
-  std::variant<static_dims_t, dynamic_dims_t> _dims 
-       = static_dims_t{Dims...};
+    set_generic_vals( {Dims...} );
+
+    if ( sizeof...(DDims) != N)
+    {
+      set_generic_vals( dims );
+    }
+
+  }
 
 };
 
+template<size_t... Dims>
+using SortBy = sort_by<Dims...>;
 
 
-template<uint Dim=0, size_t... Values>
+template<size_t... Dims>
 struct group_by : public Attr
 {
-  static const size_t N = sizeof...(Values);
+  static const size_t N = sizeof...(Dims);
   using static_vals_t  = std::array<size_t, N>;
   using dynamic_vals_t = std::vector<size_t>;
 
-  template<size_t ... sizes>
-  constexpr group_by(uint dim, std::vector<size_t> values = {sizes...} )
+  template<size_t ... DDims>
+  constexpr group_by(std::vector<size_t> dims = {DDims...} )
+  : Attr( KATTR_GROUPBY_ID )
   {
-    if ( sizeof...(sizes) != N)
+
+    set_generic_vals( {Dims...} );
+
+    if ( sizeof...(DDims) != N)
     {
-      _values = values;
+      set_generic_vals( dims );
     }
 
-    _dim = dim;
   }
  
-  uint _dim = Dim;  
-
-  /* values */
-  std::variant<static_vals_t, dynamic_vals_t> _values 
-         = static_vals_t{Values...};
-  
 };
 
+template<size_t... Dims>
+using GroupBy = group_by<Dims...>;

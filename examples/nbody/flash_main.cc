@@ -5,7 +5,7 @@
 //Adapted for FLASH from https://github.com/oneapi-src/oneAPI-samples.git
 //DirectProgramming/DPC++/N-BodyMethods/Nbody
                                                                                        //in   //in    //inout   //inout  //inout
-using PARTICLE_K = KernelDefinition<2, "particle_init",  kernel_t::EXT_BIN, Groupby<2>, ulong, float*, float**,  float**, float** >; 
+using PARTICLE_K = KernelDefinition<2, "particle_init",  kernel_t::EXT_BIN, GroupBy<2>, ulong, float*, float**,  float**, float** >; 
 
 
 struct Particles
@@ -65,16 +65,17 @@ int main(int argc, const char * argv[])
     //two steps in the 'y' dimension with an implicit barrier
     //and those repeated 10 times
     //flash memory is used to bypass the host write back from the initalization stage
-    ocrt.submit(PARTICLE_K{"process_particles"}, n_particles, ps.mass, ps.pos, ps.vel, ps.acc, &ps.energy )
+    ocrt.submit(PARTICLE_K{"process_particles"}, n_particles, ps.mass, ps.pos, ps.vels, ps.accs, &ps.energy )
         .exec(n_particles, y_stages, time_steps);
 
     //Read new positionaa
-    auto& final_particle_positions = ps.pos;
-    for( auto part_pos :  final_particle_positions.data() )
+    auto& fpos = ps.pos;
+    float (*pos)[3] = fpos.data();
+    for( size_t i=0; i < fpos.size(); i++)
     {
-      std::cout << "x = " << part_pos[0] << ", "
-                << "y = " << part_pos[1] << ", " 
-      std::cout << "z = " << part_pos[2] << std::endl;
+      std::cout << "x = " << pos[i][0] << ", "
+                << "y = " << pos[i][1] << ", " 
+                << "z = " << pos[i][2] << std::endl;
  
     }
 

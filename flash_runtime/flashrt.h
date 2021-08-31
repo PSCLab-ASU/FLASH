@@ -14,6 +14,40 @@ struct options
 
 };
 
+//used to keep track of submission parameters
+//to propagate throught the builder
+struct te_submit_params
+{
+  //backrop
+  std::vector<te_variable> _params;
+
+  //forward prop
+  std::vector<size_t> _sizes;
+  std::optional<size_t> _dependency;
+  
+};
+
+
+//used to propagate runtime attributes through
+//the builder
+struct te_runtime_params
+{
+  //backprop
+  std::vector<options> _options;
+
+};
+
+
+struct prop_vehicle
+{
+  using dispatch_set = std::pair<te_submit_params,
+                                 te_runtime_params>;
+
+  std::vector<dispatch_set> _submissions;
+
+};
+
+
 struct subaction
 {
   ulong subaction_id;
