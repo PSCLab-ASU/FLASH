@@ -27,7 +27,7 @@ extern size_t get_indices( int );
 template<typename Upstream, typename Kernel, typename Parms, typename ParmPtrs>
 struct SubmitObj;
 
-template< typename RuntimeImpl, typename _Upstream, typename _ExecParams, typename ... Ts> 
+template<typename _Upstream, typename _ExecParams, typename ... Ts> 
 class RuntimeObj;
 
 constexpr bool strings_equal(char const * a, char const * b) {
@@ -70,7 +70,7 @@ struct SubmitObj
 
   private : 
 
-    template<typename _RuntimeImpl, typename _Upstream, typename _ExecParams, typename ... Us>
+    template<typename _Upstream, typename _ExecParams, typename ... Us>
     friend class RuntimeObj;
 
     auto operator =(auto rhs)
@@ -111,13 +111,13 @@ struct SubmitObj
 };
 
 
-template<typename _RuntimeImpl = std::shared_ptr<flash_rt>, typename _Upstream = NullType, typename _ExecParams = NullType, typename ... Ts>
+template<typename _Upstream = NullType, typename _ExecParams = NullType, typename ... Ts>
 class RuntimeObj 
 {
   public :
     using Upstream_t    = _Upstream;
     using Registry_t    = std::tuple<Ts...>;
-    using RuntimeImpl_t = _RuntimeImpl;
+    using RuntimeImpl_t = std::shared_ptr<flash_rt>;
     using ExecParams_t  = _ExecParams;
 
 
@@ -128,15 +128,15 @@ class RuntimeObj
     
 
     //constructor without upstream
-    explicit  RuntimeObj(RuntimeImpl_t impl, Ts&& ... ts)
-    : _runtimeImpl(impl), _registry( ts...)
+    explicit  RuntimeObj(std::string rt_key, Ts&& ... ts)
+    : _runtimeImpl( flash_rt::get_runtime(rt_key) ), _registry( ts...)
     {
       constexpr size_t N = sizeof...(ts);
       std::cout << "Calling RuntimeObj without Upstream..." << std::endl;
       //register all functions
       std::cout << std::boolalpha;
-      std::string keys[N]   = { ts.get_method()... };
-      kernel_t kernel_types[N] = { ts.get_kernel_type()... };
+      std::string base_knames[N]  = { ts.get_method()... };
+      kernel_t kernel_types[N]    = { ts.get_kernel_type()... };
 
       constexpr std::array<bool, N> is_same( {std::is_same_v<std::string, typename Ts::program_t>...} );
       constexpr bool all_type = std::all_of( is_same.begin(), is_same.end(), [](bool b){ return b; } );
@@ -146,7 +146,7 @@ class RuntimeObj
         std::cout << "All types are strings" << std::endl;
         std::optional<std::string> inputs[N] = { ts.get_kernel_details()... };
 
-        _runtimeImpl->register_kernels(N, kernel_types,  keys, inputs);
+        _runtimeImpl->register_kernels(N, kernel_types, base_knames, nullptr, inputs);
       }
       else std::cout << "Different types detected" << std::endl;
       std::cout << "RuntimeObj Initialized" << std::endl;
@@ -206,7 +206,7 @@ class RuntimeObj
     }
  
     template<typename T>
-    RuntimeObj<RuntimeImpl_t, Upstream_t, ExecParams_t,  Ts...>& device_select(T devices) &&
+    RuntimeObj<Upstream_t, ExecParams_t,  Ts...>& device_select(T devices) &&
     {
     //this is 
       //this is updating the temp object
@@ -214,7 +214,7 @@ class RuntimeObj
     }
 
     template<typename T>
-    RuntimeObj<RuntimeImpl_t, Upstream_t, ExecParams_t, Ts...> device_select(T devices)
+    RuntimeObj<Upstream_t, ExecParams_t, Ts...> device_select(T devices)
     {
       //copy ctor the current RuntimeObj
       auto RTObj = *this;
@@ -229,8 +229,8 @@ class RuntimeObj
         friend struct SubmitObj;
 
         //constructor with upstream
-        RuntimeObj(RuntimeImpl_t impl, Upstream_t& upst, ExecParams_t exec_params, Ts&& ... ts)
-        : _upstream(upst), _runtimeImpl(impl), _exec_params(exec_params), _registry( ts...)
+        RuntimeObj(std::string rt_key, Upstream_t& upst, ExecParams_t exec_params, Ts&& ... ts)
+        : _upstream(upst), _runtimeImpl(flash_rt::get_runtime(rt_key) ), _exec_params(exec_params), _registry( ts...)
         {
           std::cout << "Calling RuntimeObj with Upstream..." << std::endl;
          
@@ -261,9 +261,10 @@ class RuntimeObj
            
             auto _te_buffers = erase_tuple( buffers, buffer_attrs, sizes );            
 
-            auto _rt_vars    = runtime_vars{ kernel.get_method(),
-                                             kernel.get_method_ovr(),
-                                             kernel.get_kernel_details(),
+            auto _rt_vars    = runtime_vars{ kernel.get_method(),           //Base kernel name
+                                             kernel.get_kernel_type(),
+                                             kernel.get_kernel_details(),   //method_override
+                                             kernel.get_method_ovr(),       //new method detials
                                              kernel.simplify_kattrs()  };
 
 	    //set transactio information
@@ -311,9 +312,9 @@ class RuntimeObj
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-template<typename _RuntimeImpl, typename _Upstream, typename _ExecParams, typename ... Ts>
+template< typename _Upstream, typename _ExecParams, typename ... Ts>
 template<size_t N, typename Kernel>
-auto RuntimeObj<_RuntimeImpl, _Upstream, _ExecParams, Ts...>::_get_directions( )
+auto RuntimeObj<_Upstream, _ExecParams, Ts...>::_get_directions( )
 {
   const size_t NInArgs    = Kernel::Get_NInArgs();
   const size_t NInOutArgs = Kernel::Get_NInOutArgs();

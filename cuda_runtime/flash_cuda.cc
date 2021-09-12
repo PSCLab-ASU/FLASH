@@ -53,7 +53,28 @@ flash_cuda::flash_cuda()
 
 }
 
-status flash_cuda::register_kernels( const std::vector<kernel_desc>& kds ) 
+status flash_cuda::allocate_buffer( te_variable&, bool& )
+{
+  return status{};
+}
+
+status flash_cuda::deallocate_buffer( std::string, bool& )
+{
+  return status{};
+}
+
+status flash_cuda::deallocate_buffers( std::string )
+{
+  return status{};
+}
+
+status flash_cuda::transfer_buffer( std::string, void * )
+{
+  return status{};
+}
+
+status flash_cuda::register_kernels( const std::vector<kernel_desc>& kds, 
+                                     std::vector<bool> & ) 
 {
   
   std::cout << "calling flash_cuda::" << __func__<<  std::endl;
@@ -63,7 +84,7 @@ status flash_cuda::register_kernels( const std::vector<kernel_desc>& kds )
     if( kernel._kernel_type == kernel_t::INT_BIN ||
         kernel._kernel_type == kernel_t::EXT_BIN )
     {
-      std::cout << "registering " << kernel._kernel_name
+      std::cout << "registering " << kernel._kernel_name.value()
 	        <<" in "<< kernel._kernel_definition.value() << std::endl;
       _process_external_binary( kernel );
     }
@@ -279,7 +300,7 @@ void flash_cuda::_process_external_binary( const kernel_desc& kd)
   //adding the module	
   _add_cuda_modules( kd._kernel_definition.value() );
   // add function to the library
-  _add_cuda_function( kd._kernel_name );
+  _add_cuda_function( kd._kernel_name.value() );
 }
 
 void flash_cuda::_add_cuda_function( std::string function_name )

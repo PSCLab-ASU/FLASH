@@ -139,7 +139,7 @@ struct exec_repo
 {
   std::vector<cpu_exec> _programs;
 
-  void check_and_register( kernel_desc& );
+  void check_and_register( const kernel_desc&, bool& );
 
   void * find_kernel_fptr( std::string, std::optional<std::string> );
 
@@ -150,12 +150,26 @@ class cpu_runtime : public IFlashableRuntime
 
   public:
 
-    status register_kernels( const std::vector<kernel_desc> & ) final;
+    status register_kernels( const std::vector<kernel_desc> &,
+                             std::vector<bool>& ) final;
 
     status execute( runtime_vars, uint, std::vector<te_variable>, std::vector<size_t> ) final;  
 
     status wait( ulong ) final;
 
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    status allocate_buffer( te_variable&, bool& ) final;
+
+    status deallocate_buffer( std::string, bool&) final;
+
+    status deallocate_buffers( std::string )      final;
+
+    status transfer_buffer( std::string, void *)  final;
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+  
     static FlashableRuntimeMeta<IFlashableRuntime> get_runtime();
 
     static std::shared_ptr<cpu_runtime> get_singleton();

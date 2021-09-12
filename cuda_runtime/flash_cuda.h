@@ -275,11 +275,20 @@ class flash_cuda : public IFlashableRuntime
 
   public:
 
-    status register_kernels( const std::vector<kernel_desc> & ) final;
+    status register_kernels( const std::vector<kernel_desc> &,
+                             std::vector<bool>& ) final;
 
     status execute( runtime_vars, uint, std::vector<te_variable>, std::vector<size_t> ) final;  
 
     status wait( ulong ) final;
+ 
+    status allocate_buffer( te_variable&, bool& ) final;
+
+    status deallocate_buffer( std::string, bool&) final;
+ 
+    status deallocate_buffers( std::string )      final;
+
+    status transfer_buffer( std::string, void *)  final;
 
     static FlashableRuntimeMeta<IFlashableRuntime> get_runtime();
 

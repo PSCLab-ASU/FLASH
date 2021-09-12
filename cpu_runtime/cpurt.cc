@@ -179,10 +179,42 @@ status cpu_runtime::execute(runtime_vars rt_vars, uint num_of_inputs,
   return status{0, wid};
 }
 
-status cpu_runtime::register_kernels( const std::vector<kernel_desc>& kds ) 
+status cpu_runtime::allocate_buffer( te_variable&, bool& )
 {
+
+
+  return status{ };
+}
+
+status cpu_runtime::deallocate_buffer( std::string buff_id, bool&)
+{
+
+  return status{ };
+}
+
+status cpu_runtime::deallocate_buffers( std::string tid )
+{
+
+  return status{ };
+}
+
+status cpu_runtime::transfer_buffer( std::string, void *)
+{
+
+  return status{ };
+}
+
+
+status cpu_runtime::register_kernels( const std::vector<kernel_desc>& kds,
+                                      std::vector<bool> & successes ) 
+{
+  bool registered;
   
-  for(auto kd : kds ) _kernel_repo.check_and_register( kd );
+  for(auto kd : kds ) 
+  {
+    _kernel_repo.check_and_register( kd, registered );
+    successes.push_back(registered);
+  }
 
   return {}; 
 }
@@ -201,7 +233,7 @@ void cpu_runtime::_stagger_start()
   std::this_thread::sleep_for(delay);
 }
 
-void exec_repo::check_and_register( kernel_desc& kd )
+void exec_repo::check_and_register( const kernel_desc& kd, bool & success )
 {
   auto kdef = kd.get_kernel_def();
   void * main_h;
@@ -221,10 +253,12 @@ void exec_repo::check_and_register( kernel_desc& kd )
       if( main_h )
       {
         _programs.emplace_back(impl, main_h);
+        success = true;
       } 
       else 
       {
         std::cout << "Could not register binary " << impl << std::endl;
+        success = false;
 	return;
       }
 
@@ -576,3 +610,5 @@ void subaction_context::exec_work_item()
     std::cout << "To many argument not supported" << std::endl;
     
 }
+
+
