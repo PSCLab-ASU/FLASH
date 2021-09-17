@@ -53,23 +53,61 @@ flash_cuda::flash_cuda()
 
 }
 
-status flash_cuda::allocate_buffer( te_variable&, bool& )
+status flash_cuda::allocate_buffer( te_variable& arg, bool& )
 {
+
+  auto dir         = arg.parm_attr.dir;
+  auto is_flash    = arg.parm_attr.is_flash_mem;
+  auto host_buffer = arg.get_data();
+  auto sz          = arg.get_bytes();
+  auto md = mem_detail( host_buffer, sz, is_flash );
+
+  std::string hbuffer_str = std::to_string((ptrdiff_t) host_buffer);
+
+  std::string key = is_flash?arg.get_fmem_id():hbuffer_str;
+
+  mem_registry.emplace(key, md );
+
   return status{};
 }
 
-status flash_cuda::deallocate_buffer( std::string, bool& )
+//only call after transaction is complete
+status flash_cuda::deallocate_buffer( std::string buffer_id, bool& success)
 {
+  auto md = mem_registry.at(buffer_id);
+
+  //deallocate 
+  md.deallocate_all( true );
+
+  mem_registry.erase(buffer_id);
+
+  success = true; 
+
   return status{};
 }
 
-status flash_cuda::deallocate_buffers( std::string )
+status flash_cuda::deallocate_buffers( std::string tid )
 {
+
+  for(size_t i =mem_registry.size(); i > 0; i--)
+  {
+    auto iter = std::next( mem_registry.begin(), i);
+    auto[key, md] = *iter;
+
+    if( !md.is_flash() && (md.last_tid() == tid) )
+      mem_registry.erase(iter); 
+  }
+
   return status{};
 }
 
-status flash_cuda::transfer_buffer( std::string, void * )
+status flash_cuda::transfer_buffer( std::string buffer_id, void * host_buffer)
 {
+
+  auto md = mem_registry.at(buffer_id);
+  
+  md.transfer_lastDtoH();
+
   return status{};
 }
 
@@ -468,5 +506,89 @@ void flash_cuda::_set_least_active_gpu_ctx()
   if( lowest != _job_count_per_ctx.end() )
     _kernel_comps.set_active_context( lowest->first );
   else std::cout << "Could not find gpu_ctx entry" << std::endl;
+}
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void mem_detail::allocate( std::string tid, cuda_context ctx, DIRECTION dir, bool init )
+{
+
+  if( !tid_exists(tid) )
+  { 
+    CUdeviceptr dptr;
+    auto mstate = add_memstate( tid, ctx, dir );
+
+    cuMemAlloc ( &dptr, sz );
+    mstate.dptr = dptr;
+
+    if( (dir == DIRECTION::IN) && init )
+      host_to_device( dptr );
+  }
+  else std::cout<< "Buffer already allocated" << std::endl;
+}
+
+void mem_detail::deallocate( std::string tid, bool transfer_back )
+{
+  auto mstate = get_mstate( tid );
+  if( (mstate->dir != DIRECTION::IN) && 
+       !is_flash() && transfer_back ) 
+  {
+    if( mstate->dptr ) device_to_host( mstate->dptr.value() );
+    else std::cout << "No device ptr to transfer data (Dealloc)" << std::endl;   
+
+  } else std::cout << "Cannot deallocate buffer" << std::endl;
+
+  if( mstate->dptr ) cuMemFree( mstate->dptr.value() );
+  else std::cout << "No device ptr to Dealloc" << std::endl;   
+
+  mstate->dptr.reset(); 
+}
+
+void mem_detail::deallocate_all( bool transfer_back )
+{
+  auto dealloc = std::bind( &mem_detail::deallocate, this, std::placeholders::_1, transfer_back );
+
+  //deallocate all transactions for this buffer
+  std::ranges::for_each( _mstates, dealloc, &mem_state::tid );
+}
+
+void mem_detail::transfer( std::string target_tid, cuda_context target_ctx, DIRECTION target_dir, bool transfer_data )
+{
+  mem_state mstate = _mstates.back();
+  std::string src_ctx_key = mstate.ctx->get_id();
+
+  if( src_ctx_key != target_ctx.get_id() )
+  {
+    allocate( target_tid, target_ctx, target_dir, false);
+    mem_state tmstate = _mstates.back();
+    device_to_device( mstate.ctx.value().cuContext,  
+                      mstate.dptr.value(),
+                      tmstate.ctx.value().cuContext, 
+                      tmstate.dptr.value() );     
+  } 
+  else
+  {
+    //ONLY need to update  tid, and dir
+    mstate.tid = target_tid;
+    mstate.dir = (mstate.dir==DIRECTION::IN)?target_dir:mstate.dir;
+    mstate.ctx = target_ctx;
+  }
+  
+}
+
+void mem_detail::host_to_device( CUdeviceptr dptr )
+{
+  cuMemcpyHtoD ( dptr, host_data, sz );
+}
+
+void mem_detail::device_to_host( CUdeviceptr dptr )
+{
+  cuMemcpyDtoH ( host_data, dptr, sz );
+}
+
+void mem_detail::device_to_device( CUcontext src_ctx, CUdeviceptr src_ptr, CUcontext dst_ctx, CUdeviceptr dst_ptr)
+{
+  cuMemcpyPeer ( dst_ptr, dst_ctx, src_ptr, src_ctx, sz );
 }
 

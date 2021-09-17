@@ -15,6 +15,7 @@
 #pragma once
 
 
+
 struct cuda_context
 {
   std::string id;
@@ -31,6 +32,23 @@ struct cuda_context
     return cuCtxSetCurrent (cuContext );   
   }
 
+  CUdeviceptr allocate_dbuffer( size_t bytes )
+  {
+    CUdeviceptr dptr;
+
+    set_context_to_current();
+
+    cuMemAlloc ( &dptr, bytes );
+
+    return dptr;
+  }
+ 
+  void deallocate_dbuffer( CUdeviceptr& dptr )
+  {
+    cuMemFree( dptr );
+    dptr = (CUdeviceptr)0;
+  }
+  
 };
 
 struct cuda_module
@@ -270,6 +288,65 @@ struct pending_job_t
 };
 
 
+//think about creating meta data for the memory
+struct mem_detail
+{
+  struct mem_state{
+    std::string tid;
+    DIRECTION dir; 
+    std::optional<cuda_context> ctx;
+    std::optional<CUdeviceptr> dptr;
+  };
+
+  mem_detail( void * data, size_t size, bool flash_mem = false) 
+  : host_data(data), sz(size), _is_flash(flash_mem) {}
+
+  auto add_memstate( std::string tid, cuda_context ctx, DIRECTION dir )
+  {
+    auto ms = mem_state{ tid, dir, ctx, {} };
+    return _mstates.emplace_back( ms );
+  }
+
+  size_t size() { return sz; }
+  bool is_flash() { return _is_flash; } 
+  void allocate( std::string, cuda_context, DIRECTION, bool init = true );
+  void deallocate( std::string, bool transfer_back = false ); 
+  void transfer( std::string , cuda_context, DIRECTION , bool );
+  void host_to_device( CUdeviceptr );
+  void device_to_host( CUdeviceptr );
+  void device_to_device(CUcontext, CUdeviceptr, CUcontext, CUdeviceptr );
+
+  void transfer_lastDtoH()
+  {
+    device_to_host( _mstates.back().dptr.value() );
+  }
+
+  void deallocate_all(bool);
+ 
+  std::string last_tid()
+  {
+    return _mstates.back().tid;
+  }
+
+  bool tid_exists( std::string tid )
+  {
+    return std::ranges::any_of( _mstates, unary_equals{tid}, 
+                                &mem_state::tid );
+  }
+
+  auto get_mstate( std::string tid)
+  {
+    return std::ranges::find( _mstates, tid, &mem_state::tid );
+  }
+
+  //flash mem ID
+  std::vector<mem_state> _mstates;
+
+  size_t sz;
+  void * host_data;
+  bool _is_flash;
+};
+
 class flash_cuda : public IFlashableRuntime
 {
 
@@ -324,6 +401,8 @@ class flash_cuda : public IFlashableRuntime
     std::map<ulong, pending_job_t> _pending_jobs;
 
     std::map<std::string, ulong> _job_count_per_ctx;
+
+    std::map<std::string, mem_detail> mem_registry;
 
     static  std::shared_ptr<flash_cuda> _global_ptr; 
 

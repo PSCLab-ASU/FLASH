@@ -79,7 +79,8 @@ std::string flash_rt::_recommend_runtime( const std::string& kernel_name,
   {
 
     auto fmem_id = fmem_arg.get_fmem_id();
-    auto runtime = _rtrs_tracker.get_runtime_by_fmem( std::to_string( fmem_id ) );
+    //auto runtime = _rtrs_tracker.get_runtime_by_fmem( std::to_string( fmem_id ) );
+    auto runtime = _rtrs_tracker.get_runtime_by_fmem( fmem_id );
     if( runtime )
       return *runtime->get_runtime_key();
     else
@@ -113,7 +114,8 @@ void flash_rt::_manage_buffers( std::string tid, std::string rtk, std::vector<te
   
   for( auto& fmem : fmems )
   {
-    auto buffer_rt  = _rtrs_tracker.get_runtime_by_fmem( std::to_string(fmem.get_fmem_id()) );
+    //auto buffer_rt  = _rtrs_tracker.get_runtime_by_fmem( std::to_string(fmem.get_fmem_id()) );
+    auto buffer_rt  = _rtrs_tracker.get_runtime_by_fmem( fmem.get_fmem_id() );
     auto buffer_rtk = buffer_rt?buffer_rt->get_runtime_key():g_NoAlloc;
 
     if( rtk == buffer_rtk ) 
@@ -382,7 +384,8 @@ runtimes_resource_tracker::register_fmem( std::string tid, std::string rtk, cons
   
   summary_flash_mem sfm;
   sfm.tid       = tid; 
-  sfm.id        = std::to_string( fmem.get_fmem_id() );
+  //sfm.id        = std::to_string( fmem.get_fmem_id() );
+  sfm.id        = fmem.get_fmem_id();
   sfm.type_size = fmem.type_size;
   sfm.vec_size  = fmem.vec_size;
   sfm.base_addr = fmem.data;
