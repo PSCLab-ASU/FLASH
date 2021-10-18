@@ -5,65 +5,11 @@
 #include <memory>
 #include <variant>
 #include <utils/common.h>
+#include <flash_runtime/transaction_interface.h>
 #include <flash_runtime/flash_interface.h>
 #include <flash_runtime/flashable_factory.h>
 
 #pragma once
-
-struct options
-{
-
-};
-
-//used to keep track of submission parameters
-//to propagate throught the builder
-struct te_submit_params
-{
-  //backrop
-  std::vector<te_variable> _params;
-
-  //forward prop
-  std::vector<size_t> _sizes;
-  std::optional<size_t> _dependency;
-  
-};
-
-
-//used to propagate runtime attributes through
-//the builder
-struct te_runtime_params
-{
-  //backprop
-  std::vector<options> _options;
-
-};
-
-
-struct prop_vehicle
-{
-  using dispatch_set = std::pair<te_submit_params,
-                                 te_runtime_params>;
-
-  std::vector<dispatch_set> _submissions;
-
-};
-
-
-struct subaction
-{
-  ulong subaction_id;
-  uint num_inputs;
-  runtime_vars rt_vars;
-  std::vector<te_variable> kernel_args;
-  std::vector<size_t> exec_parms;
-  options opt;
-
-  auto input_vars( ) 
-  { 
-    return std::make_tuple(num_inputs, rt_vars, kernel_args, exec_parms );
-  };
-
-};
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -101,22 +47,20 @@ class runtimes_resource_tracker
 
     shared_flash_runtime get_runtime_by_kname( std::string );
 
-    shared_flash_runtime get_runtime_by_fmem( std::string );
+    shared_flash_runtime get_runtime_by_mem( std::string );
 
     void register_kernel(std::string, const kernel_desc& );
 
-    void register_fmem( std::string, std::string, const te_variable& );
+    void register_mem( std::string, std::string, const te_variable& );
 
     bool kernel_exists( std::string, std::string, std::string ); //runtime_key, kname, kimpl
-
+  
+    bool transfer_buffers( o_string, o_string, te_variables );
 
   private:
 
     void _customize_runtime( std::string );
 
-    bool _transfer_buffer( std::string,shared_flash_runtime, 
-                           shared_flash_runtime, te_variable& );
- 
     std::string _get_base_loc( std::string, std::string );
       
     shared_flash_runtime _get_runtime_by( std::string );
@@ -124,8 +68,6 @@ class runtimes_resource_tracker
     std::multimap<std::string, resource> _resources;
     std::map<std::string, shared_flash_runtime>   _runtime_ptrs;
 };
-
-
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -154,7 +96,10 @@ class flash_rt
    
     status allocate_buffer( te_variable& );
 
-    
+    auto wait( ulong wid ) 
+    {
+      return _runtime_ptr->wait( wid );
+    }   
 
     ulong create_transaction();
 
@@ -169,20 +114,17 @@ class flash_rt
 
     void _register_kernel(std::string rtk, const kernel_desc& );
 
-    status _transfer_buffer( std::string, std::shared_ptr<flash_rt>,
-                             std::shared_ptr<flash_rt>, te_variable& );
-
     std::string _recommend_runtime(const std::string &,
                                    const std::vector<te_variable>& );
 
-    void _manage_buffers( std::string, std::string, std::vector<te_variable>& );
+    std::function<int()> 
+    _manage_buffers( std::string, std::string, std::vector<te_variable>& );
 
     std::optional<std::string>           _runtime_key;
     std::optional<FlashableRuntimeInfo>  _backend;
     std::shared_ptr<IFlashableRuntime>   _runtime_ptr;
 
-
-    std::multimap<ulong, subaction> _transactions;
+    transaction_interface _trans_intf;
 
     inline static std::shared_ptr<flash_rt> _global_ptr; 
     

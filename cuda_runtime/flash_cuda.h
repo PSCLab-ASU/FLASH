@@ -6,6 +6,7 @@
 #include <variant>
 #include <map>
 #include <flash_runtime/flash_interface.h>
+#include <flash_runtime/transaction_interface.h>
 #include <flash_runtime/flashable_factory.h>
 #include <boost/align/aligned_allocator.hpp>
 #include <regex>
@@ -180,7 +181,7 @@ struct kernel_components
 			       &cuda_module::location);
   }
 
-  std::string get_current_ctx_key( )
+  cuda_context& get_current_ctx()
   {
     CUcontext cuCtx;
     CUdevice cuDevice;
@@ -195,8 +196,14 @@ struct kernel_components
 
     } );
     
-    return ctx_key->id;
+    return *ctx_key;
+    
+  }
 
+  std::string get_current_ctx_key( )
+  {
+    cuda_context& cc = get_current_ctx();    
+    return cc.id;
   }
 
   std::optional<CUfunction> get_function( std::string fid )
@@ -263,26 +270,43 @@ struct kernel_library
 
 struct pending_job_t
 {
+  ulong trans_id;
+  ulong subaction_id;
   uint nInputs;
   std::string cuCtx_key;
   std::vector<te_variable> kernel_args;
   std::vector<CUdeviceptr> device_buffers; 
+  std::function<int()> pending_launch;
 
-  pending_job_t( std::string ctx_key, std::vector<te_variable> host_buffs, 
-		 std::vector<CUdeviceptr> dev_buffs, uint num_inputs)
+  pending_job_t( ulong tid, ulong sid, std::string ctx_key, std::vector<te_variable> host_buffs, 
+		 std::vector<CUdeviceptr> dev_buffs, uint num_inputs, 
+                 std::function<int()> deffered_launch )
   {
+    trans_id       = tid;
+    subaction_id   = sid;
     cuCtx_key      = ctx_key;
     kernel_args    = host_buffs;
     device_buffers = dev_buffs;
     nInputs        = num_inputs;
+    pending_launch = deffered_launch;
+  }
+
+  ulong& get_tid()
+  {
+    return trans_id;
+  }
+
+  std::pair<ulong, ulong> get_ids()
+  {
+    return std::make_pair( trans_id, subaction_id );
   }
 
   ~pending_job_t()
   {
-    std::ranges::for_each(device_buffers, [](auto& dev_buffer )
+    /*std::ranges::for_each(device_buffers, [](auto& dev_buffer )
     {
       cuMemFree( dev_buffer );
-    } );
+    } );*/
   }
 
 };
@@ -292,10 +316,18 @@ struct pending_job_t
 struct mem_detail
 {
   struct mem_state{
+    using ctx_type = std::optional<cuda_context>;
+
     std::string tid;
     DIRECTION dir; 
     std::optional<cuda_context> ctx;
     std::optional<CUdeviceptr> dptr;
+    bool in_use;
+
+    std::string get_cid(){
+      return ctx->get_id();
+    }
+
   };
 
   mem_detail( void * data, size_t size, bool flash_mem = false) 
@@ -307,6 +339,19 @@ struct mem_detail
     return _mstates.emplace_back( ms );
   }
 
+  mem_state& get_memstate( std::string tid )
+  {
+    //return *std::ranges::find( _mstates, unary_equals{ tid }, &mem_detail::mem_state::tid );
+    return *std::ranges::find( _mstates, tid, &mem_detail::mem_state::tid );
+  }
+
+  void reconcile_memstate( ulong, ulong, cuda_context, DIRECTION);
+
+  bool memstate_exists( std::string tid )
+  {
+    return std::ranges::any_of( _mstates, unary_equals{tid}, &mem_detail::mem_state::tid );
+  }
+
   size_t size() { return sz; }
   bool is_flash() { return _is_flash; } 
   void allocate( std::string, cuda_context, DIRECTION, bool init = true );
@@ -315,6 +360,17 @@ struct mem_detail
   void host_to_device( CUdeviceptr );
   void device_to_host( CUdeviceptr );
   void device_to_device(CUcontext, CUdeviceptr, CUcontext, CUdeviceptr );
+
+
+  bool in_use( std::string tid )
+  {
+    auto md = std::ranges::find( _mstates, tid, &mem_detail::mem_state::tid);
+    if( md != _mstates.end() )
+    {
+      return md->in_use;
+    }
+    else return false;
+  } 
 
   void transfer_lastDtoH()
   {
@@ -334,13 +390,20 @@ struct mem_detail
                                 &mem_state::tid );
   }
 
-  auto get_mstate( std::string tid)
+  mem_state& get_mstate( std::string tid)
   {
-    return std::ranges::find( _mstates, tid, &mem_state::tid );
+    auto ms = std::ranges::find( _mstates, tid, &mem_state::tid );
+    if( ms != std::end(_mstates) )
+      return *ms;
+    else throw std::logic_error( "No valid mstates" );
   }
 
   //flash mem ID
   std::vector<mem_state> _mstates;
+
+  std::map<std::pair<ulong, ulong>, 
+           std::pair<mem_state, mem_state> >
+    _pending_transfers;
 
   size_t sz;
   void * host_data;
@@ -355,7 +418,7 @@ class flash_cuda : public IFlashableRuntime
     status register_kernels( const std::vector<kernel_desc> &,
                              std::vector<bool>& ) final;
 
-    status execute( runtime_vars, uint, std::vector<te_variable>, std::vector<size_t> ) final;  
+    status execute( ulong, ulong ) final;  
 
     status wait( ulong ) final;
  
@@ -366,6 +429,8 @@ class flash_cuda : public IFlashableRuntime
     status deallocate_buffers( std::string )      final;
 
     status transfer_buffer( std::string, void *)  final;
+
+    status set_trans_intf( std::shared_ptr<transaction_interface> ) final;
 
     static FlashableRuntimeMeta<IFlashableRuntime> get_runtime();
 
@@ -394,6 +459,17 @@ class flash_cuda : public IFlashableRuntime
 
     int _find_cubin_offset( void *, size_t, std::string, size_t *, std::string * );
 
+    void _assess_mem_buffers( ulong, ulong, std::vector<te_variable>& );
+
+    std::vector<CUdeviceptr> _checkout_device_buffers( ulong, std::vector<te_variable>&, bool& );
+    void _release_device_buffers( ulong, std::vector<te_variable>& );
+
+    bool _try_exec_next_pjob( ulong );
+
+    void _writeback_to_host( ulong, te_variable& );
+
+    void _deallocate_buffer( ulong, te_variable& );
+
     kernel_components  _kernel_comps;
 
     kernel_library _kernel_lib;
@@ -402,7 +478,9 @@ class flash_cuda : public IFlashableRuntime
 
     std::map<std::string, ulong> _job_count_per_ctx;
 
-    std::map<std::string, mem_detail> mem_registry;
+    std::map<std::string, mem_detail> _mem_registry;
+
+    std::shared_ptr<transaction_interface> _trans_intf;
 
     static  std::shared_ptr<flash_cuda> _global_ptr; 
 

@@ -1,4 +1,5 @@
 #include <flash_runtime/flashrt.h>
+#include <flash_runtime/transaction_interface.h>
 #include <ranges>
 #include <algorithm>
 
@@ -39,6 +40,7 @@ EXPORT flash_rt::flash_rt( std::string lookup)
     _backend = FlashableRuntimeFactory::Create( lookup );
     //get pointer to backend runtime
     _runtime_ptr = _backend.value()();
+    _runtime_ptr->set_trans_intf( std::shared_ptr<transaction_interface>( &_trans_intf ) );
     std::cout << "Ctor'ing flash_rt...." << std::endl;
 
     std::cout << _backend->get_description() << std::endl; 
@@ -80,7 +82,7 @@ std::string flash_rt::_recommend_runtime( const std::string& kernel_name,
 
     auto fmem_id = fmem_arg.get_fmem_id();
     //auto runtime = _rtrs_tracker.get_runtime_by_fmem( std::to_string( fmem_id ) );
-    auto runtime = _rtrs_tracker.get_runtime_by_fmem( fmem_id );
+    auto runtime = _rtrs_tracker.get_runtime_by_mem( fmem_id );
     if( runtime )
       return *runtime->get_runtime_key();
     else
@@ -101,47 +103,43 @@ std::string flash_rt::_recommend_runtime( const std::string& kernel_name,
   return kernel_rtks[0];
 }
 
-void flash_rt::_manage_buffers( std::string tid, std::string rtk, std::vector<te_variable>& kernel_args )
+std::function<int()>
+flash_rt::_manage_buffers( std::string tid, std::string rtk, std::vector<te_variable>& kernel_args )
 {
   auto exec_rt = _rtrs_tracker.get_create_runtime( rtk );
+  std::function<int()> out;
 
-  auto fmem_pred = [](auto arg) -> bool
-  {  
-    return arg.is_flash_mem();
-  };
-
-  auto fmems = kernel_args | std::views::filter(fmem_pred);
-  
-  for( auto& fmem : fmems )
+  int i =0;
+  std::vector<int> indxs;
+  for( auto& mem : kernel_args )
   {
-    //auto buffer_rt  = _rtrs_tracker.get_runtime_by_fmem( std::to_string(fmem.get_fmem_id()) );
-    auto buffer_rt  = _rtrs_tracker.get_runtime_by_fmem( fmem.get_fmem_id() );
+    auto buffer_rt  = _rtrs_tracker.get_runtime_by_mem( mem.get_mem_id() );
     auto buffer_rtk = buffer_rt?buffer_rt->get_runtime_key():g_NoAlloc;
 
     if( rtk == buffer_rtk ) 
-      std::cout << "Buffer " << fmem.get_fmem_id() << " already allocated" << std::endl;
+      std::cout << "Buffer " << mem.get_mem_id() << " already allocated" << std::endl;
     else if ( buffer_rtk == g_NoAlloc )
     {
-      bool res = exec_rt->allocate_buffer(fmem);
-      if( res ) _rtrs_tracker.register_fmem( tid, rtk, fmem );
+      bool res = exec_rt->allocate_buffer(mem);
+      if( res ) _rtrs_tracker.register_mem( tid, rtk, mem );
     }
-    else if( rtk != buffer_rtk )
-      //transaction id, src_rt, dst_rt, buffer_info
-      _transfer_buffer(tid, buffer_rt, exec_rt, fmem ); 
-
+    else if( rtk != buffer_rtk ) indxs.push_back( i );
+ 
+    i++;
   }
 
+  out = [this, rtk, indxs, kernel_args]()-> int
+  {
+
+    for( int i : indxs )
+    {
+      this->_rtrs_tracker.transfer_buffers( rtk, {}, {kernel_args.at(i)} ); 
+    }
+    return 0;
+  };
+
+  return out;
 }
-
-status flash_rt::_transfer_buffer( std::string, std::shared_ptr<flash_rt> buffer_rt, 
-                                   std::shared_ptr<flash_rt> exec_rt, te_variable& fmem )
-{
-
-
-  return status{};
-}
-        
-
 
 status EXPORT flash_rt::execute(runtime_vars rt_vars,  uint num_of_inputs, 
                          std::vector<te_variable> kernel_args, std::vector<size_t> exec_parms, options opt)
@@ -158,7 +156,7 @@ status EXPORT flash_rt::execute(runtime_vars rt_vars,  uint num_of_inputs,
  
   std::string rtk = _runtime_key.value_or(g_NoRuntime);
 
-  if( _runtime_key == "ALL" )
+  if( _runtime_key == g_NoRuntime )
   {
     auto kname_ovr   = rt_vars.get_kname_ovr();
     auto kernel_name = kname_ovr.value_or( rt_vars.get_lookup() );
@@ -166,11 +164,27 @@ status EXPORT flash_rt::execute(runtime_vars rt_vars,  uint num_of_inputs,
     rtk = _recommend_runtime( kernel_name, kernel_args);
   }
   
-  _manage_buffers( std::to_string(trans_id), rtk, kernel_args );
+  auto sa = subaction{ suba_id, rtk, num_of_inputs, rt_vars, kernel_args, 
+                       exec_parms, opt };
 
-  auto sa = subaction{suba_id, num_of_inputs, rt_vars, kernel_args, exec_parms, opt};
   //add transactio and subactionsa
-  _transactions.emplace( trans_id, sa );
+  auto& sa_ref = _trans_intf.add_sa2ta( trans_id, std::move(sa) );
+  
+  auto deferred_transfer = 
+       _manage_buffers( std::to_string(trans_id), rtk, kernel_args );
+  //check predecessor conditionals
+  //
+  auto [dep_pred, succ_pred] = _trans_intf(trans_id).get_pred(suba_id);
+
+  auto pred = [dep_pred, deferred_transfer]()->int
+  {
+    dep_pred();
+    deferred_transfer();
+    return 0;
+  };
+
+  sa_ref.set_preds( std::move(pred), std::move(succ_pred) );
+
 
   return {};
 }
@@ -223,9 +237,6 @@ status EXPORT flash_rt::register_kernels( size_t num_kernels, kernel_t kernel_ty
 status flash_rt::allocate_buffer( te_variable& )
 {
 
-
-
-
   return status{};
 }
 
@@ -241,9 +252,11 @@ status EXPORT flash_rt::process_transaction( ulong tid )
   std::cout << "calling flash_rt::" << __func__ <<"("<<tid <<")" << std::endl;
   ///////////////////////////////////////////////////////////
   std::vector<status> statuses;
+  strings rtks;
  
-  auto [b_iter, e_iter] = _transactions.equal_range(tid);
+  auto [b_iter, e_iter] = _trans_intf.get_transaction(tid);
 
+  _trans_intf.demarc_boundaries(tid);
   
   std::cout << "--Got transactions" << std::endl;
   if( !_runtime_ptr ) std::runtime_error("No backend selected/available!");
@@ -268,15 +281,21 @@ status EXPORT flash_rt::process_transaction( ulong tid )
     //submit subactions
     std::for_each( pipeline.begin(), pipeline.end(), [&](subaction& stage)
     {
-      auto[num_of_inputs, rt_vars, kernel_args, exec_parms] = stage.input_vars();
+      auto[num_of_inputs, rt_vars, kernel_args, exec_parms,
+           pre_pred, post_pred ] = stage.input_vars();
 
+      auto sa_id = stage.get_saId();
+      auto opts  = stage.get_options();
       auto ktype = rt_vars.get_ktype();
       auto base_kname = rt_vars.get_lookup();
       auto kname_ovr  = rt_vars.get_kname_ovr();
       auto kname_impl = rt_vars.get_kimpl();
       register_kernels( 1, &ktype, &base_kname, &kname_ovr, &kname_impl ); 
-                           
-      statuses.push_back( _runtime_ptr->execute(rt_vars, num_of_inputs, kernel_args, exec_parms ) );
+     
+      auto runtime  = _rtrs_tracker.get_create_runtime( stage.get_rtk() ); 
+      rtks.push_back( stage.get_rtk() );                    
+
+      statuses.push_back( runtime->execute(rt_vars, num_of_inputs, kernel_args, exec_parms, opts ) );
 
     });
 
@@ -288,8 +307,12 @@ status EXPORT flash_rt::process_transaction( ulong tid )
       {
         auto wid = stat.work_id.value();
         std::cout << "waiting on " << wid << " to complete..." << std::endl;
-        return _runtime_ptr->wait( wid );
+        auto runtime  = _rtrs_tracker.get_create_runtime( rtks.front() ); 
+        
+        auto ret = runtime->wait( wid );
         std::cout << "completed " << wid << std::endl;
+        rtks.erase( rtks.begin() );
+        return ret;
       }
       else 
       {
@@ -359,9 +382,9 @@ runtimes_resource_tracker::get_runtime_by_kname( std::string kname )
 
 
 runtimes_resource_tracker::shared_flash_runtime
-runtimes_resource_tracker::get_runtime_by_fmem( std::string fmem_id )
+runtimes_resource_tracker::get_runtime_by_mem( std::string mem_id )
 {
-  auto rt_sptr = _get_runtime_by( fmem_id );
+  auto rt_sptr = _get_runtime_by( mem_id );
   return rt_sptr;
 }
 
@@ -379,16 +402,16 @@ runtimes_resource_tracker::_get_runtime_by( std::string id )
 }
 
 void
-runtimes_resource_tracker::register_fmem( std::string tid, std::string rtk, const te_variable& fmem )
+runtimes_resource_tracker::register_mem( std::string tid, std::string rtk, const te_variable& mem )
 {
   
   summary_flash_mem sfm;
   sfm.tid       = tid; 
   //sfm.id        = std::to_string( fmem.get_fmem_id() );
-  sfm.id        = fmem.get_fmem_id();
-  sfm.type_size = fmem.type_size;
-  sfm.vec_size  = fmem.vec_size;
-  sfm.base_addr = fmem.data;
+  sfm.id        = mem.get_mem_id();
+  sfm.type_size = mem.type_size;
+  sfm.vec_size  = mem.vec_size;
+  sfm.base_addr = mem.data;
 
   _resources.emplace( rtk, sfm );
   
@@ -470,8 +493,7 @@ bool runtimes_resource_tracker::kernel_exists( std::string rtk, std::string knam
   return true;
 }
 
-bool runtimes_resource_tracker::_transfer_buffer( std::string tid, shared_flash_runtime src, 
-                                                  shared_flash_runtime dst, te_variable& fmem )
+bool runtimes_resource_tracker::transfer_buffers( o_string dst_rtk, o_string src_rtk, te_variables buffs )
 {
   //TBD dont foret to deallocate from src runtime.
   std::cout<< "transferring buffers...." << std::endl;

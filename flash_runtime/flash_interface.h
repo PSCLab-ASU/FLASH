@@ -2,6 +2,7 @@
 #include <string>
 #include <map>
 #include <utils/common.h>
+#include <flash_runtime/transaction_interface.h>
 
 #pragma once
 
@@ -21,9 +22,9 @@ class IFlashableRuntime
 
     virtual status transfer_buffer( std::string, void *) =0;    //get data by buffer_id
 
-    virtual status execute(runtime_vars, uint num_of_inputs,
-                           std::vector<te_variable> kernel_args, 
-                           std::vector<size_t> exec_parms) =0;
+    virtual status set_trans_intf( std::shared_ptr<transaction_interface> ) =0;
+
+    virtual status execute(ulong, ulong) =0;
     virtual status wait( ulong ) =0;
 };
 

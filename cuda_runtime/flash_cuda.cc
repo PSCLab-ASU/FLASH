@@ -62,11 +62,9 @@ status flash_cuda::allocate_buffer( te_variable& arg, bool& )
   auto sz          = arg.get_bytes();
   auto md = mem_detail( host_buffer, sz, is_flash );
 
-  std::string hbuffer_str = std::to_string((ptrdiff_t) host_buffer);
+  std::string key = arg.get_mem_id();
 
-  std::string key = is_flash?arg.get_fmem_id():hbuffer_str;
-
-  mem_registry.emplace(key, md );
+  _mem_registry.emplace(key, md );
 
   return status{};
 }
@@ -74,12 +72,12 @@ status flash_cuda::allocate_buffer( te_variable& arg, bool& )
 //only call after transaction is complete
 status flash_cuda::deallocate_buffer( std::string buffer_id, bool& success)
 {
-  auto md = mem_registry.at(buffer_id);
+  auto md = _mem_registry.at(buffer_id);
 
   //deallocate 
   md.deallocate_all( true );
 
-  mem_registry.erase(buffer_id);
+  _mem_registry.erase(buffer_id);
 
   success = true; 
 
@@ -89,13 +87,13 @@ status flash_cuda::deallocate_buffer( std::string buffer_id, bool& success)
 status flash_cuda::deallocate_buffers( std::string tid )
 {
 
-  for(size_t i =mem_registry.size(); i > 0; i--)
+  for(size_t i =_mem_registry.size(); i > 0; i--)
   {
-    auto iter = std::next( mem_registry.begin(), i);
+    auto iter = std::next( _mem_registry.begin(), i);
     auto[key, md] = *iter;
 
     if( !md.is_flash() && (md.last_tid() == tid) )
-      mem_registry.erase(iter); 
+      _mem_registry.erase(iter); 
   }
 
   return status{};
@@ -104,10 +102,16 @@ status flash_cuda::deallocate_buffers( std::string tid )
 status flash_cuda::transfer_buffer( std::string buffer_id, void * host_buffer)
 {
 
-  auto md = mem_registry.at(buffer_id);
+  auto md = _mem_registry.at(buffer_id);
   
   md.transfer_lastDtoH();
 
+  return status{};
+}
+
+status flash_cuda::set_trans_intf( std::shared_ptr<transaction_interface> trans_intf )
+{
+  _trans_intf = trans_intf;
   return status{};
 }
 
@@ -136,6 +140,46 @@ status flash_cuda::register_kernels( const std::vector<kernel_desc>& kds,
   return {}; 
 }
 
+bool flash_cuda::_try_exec_next_pjob( ulong wid )
+{
+  bool ret = true;
+  auto& pjob = _pending_jobs.at(wid);
+  auto[trans_id, subaction_id] = pjob.get_ids();
+
+  //////////////////////////////////////////////////////////////////////////////
+  auto& sa_payload = _trans_intf->find_sa_within_ta(subaction_id, trans_id);
+  sa_payload.post_pred();
+  //////////////////////////////////////////////////////////////////////////////
+   //TBD
+   //need to check for the second job with the given tid
+   //because the first one hasn't been deleted yet.a
+   //if the second TID entry doesn't have a deffered action
+   //return false
+  auto pjob_pipe = _pending_jobs | std::views::filter([&](auto& pj) 
+  {
+    auto[tid, sa_id] = pj.second.get_ids();
+    return tid == trans_id;
+  } ) | std::views::drop(1) | std::views::take(1);
+
+     
+  if( auto nx_pjob_It = std::begin(pjob_pipe); 
+      (nx_pjob_It != std::end(pjob_pipe)) )
+  {
+    auto[nx_tid, nx_sid] = (*nx_pjob_It).second.get_ids(); 
+    auto& nx_sa_payload = _trans_intf->find_sa_within_ta(nx_sid, nx_tid);
+
+    nx_sa_payload.pre_pred();
+
+    if( (*nx_pjob_It).second.pending_launch )
+      (*nx_pjob_It).second.pending_launch();
+
+    ret = false;
+  }
+
+  return ret;
+}
+
+
 status flash_cuda::wait( ulong  wid)
 {
   std::cout << "Enttering " << __func__ << std::endl;
@@ -145,31 +189,63 @@ status flash_cuda::wait( ulong  wid)
   if( entry != _pending_jobs.end() ) 
   {
     //set context to the job related to wid;
-    auto pjob = entry->second;
+    auto pjob  = entry->second;
+    auto tid   = pjob.trans_id;
+    auto sa_id = pjob.subaction_id; 
+    //////////////////////////////////////////////////////////////////////////////
+    auto& sa_payload = _trans_intf->find_sa_within_ta(sa_id, tid);
+    auto [num_of_inputs, rt_vars, kernel_args, 
+          exec_parms, pre_pred, post_pred] = sa_payload.input_vars();
+    //////////////////////////////////////////////////////////////////////////////
+
     _kernel_comps.set_active_context( pjob.cuCtx_key );
     //blocks until job is complete
     std::cout << "Sync'ing ctx..." << std::endl;
     int ret = cuCtxSynchronize();
     std::cout << "waiting complete" << std::endl;
-    //move data from device buffer to host buffera
-    std::vector<int> rets;
-    int i=0;
-    std::ranges::transform(pjob.kernel_args, pjob.device_buffers, std::back_inserter( rets ),
-		           [&](auto h_args, auto d_args)
-		           {
-			     //only move output buffers
-			     if( i++; i > pjob.nInputs )
-			     {
-			       std::cout << "transfering buffer " << i << " from device to host" << std::endl;
-                               return cuMemcpyDtoH ( h_args.get_data(), d_args, h_args.get_bytes() );
-			     }
-			     else return CUDA_SUCCESS;
-  
-		           } );
+    ///////////////release resources/////////////////
+    post_pred();
+    _release_device_buffers( tid, kernel_args );
+    /////////////////////////////////////////////////
+    
+    //move data from device buffer to host buffer
+    bool last_saction = _try_exec_next_pjob( wid );
 
-    bool success = std::ranges::all_of( rets, unary_equals{(int)CUDA_SUCCESS} );
+    //This means there are no more pending jobs
+    //or a specific transaction
+    if( last_saction )
+    {
+      //check if transaction defers deallocation
+      // or if they are flash memory 
+      bool defer_dealloc   = _trans_intf->operator()(tid).check_option(sa_id, trans_options::DEFER_DEALLOC  );
+      bool defer_writeback = _trans_intf->operator()(tid).check_option(sa_id, trans_options::DEFER_WB );
 
-    if( !success ) std::cout << "Could not move all device buffers to host" << std::endl;
+       
+      for( auto& tvar : pjob.kernel_args )
+        if( tvar.is_flash_mem() )
+        {
+          //if flash memor skip implicit processing
+        }
+        else if( !defer_writeback && defer_dealloc )
+        {
+          //forces a writeback at the end of the transaction
+          //bust dont deallocate buffer
+          _writeback_to_host( tid, tvar );
+        }
+        else if( defer_writeback && !defer_dealloc )
+        {
+          //just edallocate buffer without writing the data back
+          _deallocate_buffer( tid, tvar );
+        }
+        else if( !defer_writeback && !defer_dealloc )
+        {
+          //write back to host and deallocate buffer
+          //just edallocate buffer without writing the data back
+          _writeback_to_host( tid, tvar );
+          _deallocate_buffer( tid, tvar );
+        }
+
+    }
 
     //remove job
     _pending_jobs.erase( wid);
@@ -179,56 +255,31 @@ status flash_cuda::wait( ulong  wid)
   return status{};
 }
 
-status flash_cuda::execute(runtime_vars rt_vars, uint num_of_inputs, 
-                              std::vector<te_variable> kernel_args, std::vector<size_t> exec_parms)
+//status flash_cuda::execute(runtime_vars rt_vars, uint num_of_inputs, 
+//                              std::vector<te_variable> kernel_args, std::vector<size_t> exec_parms)
+status flash_cuda::execute( ulong trans_id, ulong sa_id )
 {
   std::cout << "Executing from cuda-flash_runtime..." << __func__ << std::endl;
+  //////////////////////////////////////////////////////////////////////////////
+  ulong wid = random_number(); 
+  auto& sa_payload = _trans_intf->find_sa_within_ta(sa_id, trans_id);
+  auto [num_of_inputs, rt_vars, kernel_args, 
+         exec_parms, pre_pred, post_pred] = sa_payload.input_vars();
+  //////////////////////////////////////////////////////////////////////////////
   std::cout << "Executing : " << rt_vars.get_lookup() <<" ..."<< std::endl;
-
+ 
   //set current context to context with the least amount of work
   _set_least_active_gpu_ctx();
   std::string kernel_name = rt_vars.kernel_name_override?rt_vars.kernel_name_override.value():rt_vars.get_lookup();
   auto func_binary = _kernel_lib.get_cufunction_for_current_ctx( kernel_name, rt_vars.kernel_impl_override );
   auto ctx_key     = _kernel_comps.get_current_ctx_key();
-  //auto input_kargs = std::vector<te_variable>( kernel_args.begin(), kernel_args.begin() + num_of_inputs); 
+  //auto input_kargs = std::vector<te_variable>( kernel_args.begin(), kernel_args.begin() + num_of_inputs);
 
   if( func_binary )
   {
     int i =0;
+    bool defer=false;
     std::cout << "Found executable kernel..." << std::endl;
-    std::vector<CUdeviceptr> device_buffers( kernel_args.size() );
-    //std::ranges::transform( kernel_args, std::back_inserter( device_buffers ), 
-    std::ranges::transform( kernel_args, device_buffers.begin(), 
-                            [&](auto host_buffer )
-			    {
-			      CUdeviceptr dev_ptr;
-			      size_t buffer_size = host_buffer.get_bytes();
-			      std::cout << "Allocating device memory : " << buffer_size << std::endl;
-                              auto ret = cuMemAlloc(&dev_ptr, buffer_size );
-
-			      if( ret == CUDA_SUCCESS )
-			      {
-			        //only transfer the inputs from H -> D
-			        if( i++; i <= num_of_inputs )
-			        {
-			          std::cout << "Transfering buffer from host to device : " << i << std::endl;
-			          ret = cuMemcpyHtoD( dev_ptr, host_buffer.get_data(), buffer_size );
-				  if( ret != CUDA_SUCCESS)
-				    std::cout << "Failed to send data to device" << std::endl;
-			        }
-			      }
-			      else std::cout << "Failed to allocate device memory" << std::endl;
-
-			      return dev_ptr;
-			    });	
-
-    //create pending job entry
-    //WARNING MAKE SURE this void * is valid during the invocation of the kernel
-    //void * is a CUDA back to erase the type of the device pointer.
-    std::vector<void *> void_devs_buffs;
-    std::ranges::transform(device_buffers, std::back_inserter( void_devs_buffs ),
-    		           [](auto& device_buffer) { return (void *) &device_buffer; } );
-
     //launch kernel
     std::vector<size_t> dims(8, 1);
     dims[7] = dims[6] = 0;
@@ -236,29 +287,89 @@ status flash_cuda::execute(runtime_vars rt_vars, uint num_of_inputs,
 
     std::ranges::copy( dims, std::ostream_iterator<size_t>{std::cout, ", "} );
     std::cout << std::endl;
-    int ret = cuLaunchKernel(func_binary.value(), dims[0], dims[1], dims[2], dims[3], 
-                             dims[4], dims[5], dims[6], nullptr, void_devs_buffs.data(), 0);
-    //int ret = cuLaunchKernel(func_binary.value(), 1, 1, 1, 1, 1, 1, 0, 0, void_devs_buffs.data(), 0);
+    int ret = CUDA_SUCCESS;
+    std::function<int()> deferred_launch;
 
-    if( ret == CUDA_SUCCESS)
+    auto first_sa = !std::ranges::any_of(_pending_jobs, [trans_id](auto pjob)
+                    { 
+                      return pjob.second.get_tid() == trans_id;
+                    });
+
+    if( first_sa ) //eager
     {
-      std::cout << "Kernel successfully launched..." << std::endl;
-      ulong wid = random_number(); 
-      //pending jobs
+      pre_pred();   
+      _assess_mem_buffers( trans_id, sa_id, kernel_args );
+      std::vector<CUdeviceptr> device_buffers = _checkout_device_buffers( trans_id, kernel_args, defer );
+      //create pending job entry
+      //WARNING MAKE SURE this void * is valid during the invocation of the kernel
+      //void * is a CUDA back to erase the type of the device pointer.
+      std::vector<void *> void_devs_buffs;
+      std::ranges::transform(device_buffers, std::back_inserter( void_devs_buffs ),
+      		             [](auto& device_buffer) { return (void *) &device_buffer; } );
 
-      _pending_jobs.emplace(std::piecewise_construct,
-		            std::forward_as_tuple(wid),
-			    std::forward_as_tuple(ctx_key, kernel_args, device_buffers, num_of_inputs ) );
+      ret = cuLaunchKernel(func_binary.value(), dims[0], dims[1], dims[2], dims[3], 
+                           dims[4], dims[5], dims[6], nullptr, void_devs_buffs.data(), 0);
 
-      _job_count_per_ctx.at(ctx_key) += 1;
+      if( ret == CUDA_SUCCESS)
+      {
+        std::cout << "Kernel successfully launched..." << std::endl;
 
-      auto stat = status{0, wid };
+        _pending_jobs.emplace(std::piecewise_construct,
+	  	              std::forward_as_tuple(wid),
+		  	      std::forward_as_tuple(trans_id, sa_id, ctx_key, kernel_args, device_buffers, 
+                                                    num_of_inputs, deferred_launch) );
 
-      return stat;
+        _job_count_per_ctx.at(ctx_key) += 1;
+
+        auto stat = status{0, wid };
+
+        return stat;
+      }
+      else std::cout << "Could not launch " << rt_vars.get_lookup() << " : " << ret << std::endl;
+
     }
-    else std::cout << "Could not launch " << rt_vars.get_lookup() << " : " << ret << std::endl;
-    
-  }
+    else //lazy
+    {
+      deferred_launch = [&, tid=trans_id, sid=sa_id]()->int
+      {
+        bool defer=false;
+        pre_pred();   
+        _assess_mem_buffers( tid, sid, kernel_args );
+        std::vector<CUdeviceptr> device_buffers = _checkout_device_buffers( tid, kernel_args, defer );
+
+        if(defer) std::logic_error("Buffers are not available");
+
+        //create pending job entry
+        //WARNING MAKE SURE this void * is valid during the invocation of the kernel
+        //void * is a CUDA back to erase the type of the device pointer.
+        std::vector<void *> void_devs_buffs;
+        std::ranges::transform(device_buffers, std::back_inserter( void_devs_buffs ),
+      	  	               [](auto& device_buffer) { return (void *) &device_buffer; } );
+        _kernel_comps.set_active_context( ctx_key );
+        int res = cuLaunchKernel(func_binary.value(), dims[0], dims[1], dims[2], dims[3], 
+                                 dims[4], dims[5], dims[6], nullptr, void_devs_buffs.data(), 0);
+        if( ret == CUDA_SUCCESS)
+        {
+          std::cout << "Kernel successfully launched..." << std::endl;
+  
+          _pending_jobs.emplace(std::piecewise_construct,
+  	  	              std::forward_as_tuple(wid),
+  		  	      std::forward_as_tuple(tid, sid, ctx_key, kernel_args, device_buffers, 
+                                                      num_of_inputs, deferred_launch) );
+  
+          _job_count_per_ctx.at(ctx_key) += 1;
+  
+          auto stat = status{0, wid };
+  
+          return stat;
+        }
+        else std::cout << "Could not launch " << rt_vars.get_lookup() << " : " << ret << std::endl;
+          return res;
+      };
+
+    } //end of first_sa else
+
+  } //end  func_binary
   else
   {
     std::cout << "Could not find function to execute" << std::endl;
@@ -267,6 +378,50 @@ status flash_cuda::execute(runtime_vars rt_vars, uint num_of_inputs,
   return status{-1};
 }
 
+std::vector<CUdeviceptr> 
+flash_cuda::_checkout_device_buffers( ulong tid, std::vector<te_variable>& kargs, bool & defer )
+{
+  std::vector<CUdeviceptr> out;
+
+  std::string tid_str = std::to_string(tid);
+
+  std::ranges::for_each(kargs, [&](auto arg)
+  {
+    std::string key = arg.get_mem_id();
+
+    //////////////////////////////////////////////////////
+    auto& md = _mem_registry.at(key);
+    //////////////////////////////////////////////////////
+    auto& ms = md.get_mstate( tid_str );
+    defer |= ms.in_use && (arg.parm_attr.dir != DIRECTION::IN);
+    ms.in_use = true;
+
+    out.push_back( ms.dptr.value() );
+    //////////////////////////////////////////////////////
+  } );
+
+  return out;
+
+}
+
+void
+flash_cuda::_release_device_buffers( ulong tid, std::vector<te_variable>& kargs )
+{
+
+  std::string tid_str = std::to_string(tid);
+
+  std::ranges::for_each(kargs, [&](auto arg)
+  {
+    std::string key = arg.get_mem_id();
+    //////////////////////////////////////////////////////
+    auto& md = _mem_registry.at(key);
+    //////////////////////////////////////////////////////
+    auto& ms = md.get_mstate( tid_str );
+    ms.in_use = false;
+    //////////////////////////////////////////////////////
+  } );
+
+}
 
 void flash_cuda::_reset_cuda_ctx()
 {
@@ -507,6 +662,42 @@ void flash_cuda::_set_least_active_gpu_ctx()
     _kernel_comps.set_active_context( lowest->first );
   else std::cout << "Could not find gpu_ctx entry" << std::endl;
 }
+
+void flash_cuda::_assess_mem_buffers( ulong trans_id, ulong sa_id, std::vector<te_variable>& vars )
+{
+  cuda_context& cc = _kernel_comps.get_current_ctx();
+  
+  bool success = false;
+  for( auto& var : vars )
+  {
+    std::string buff_id = var.get_mem_id();
+    
+    if( !_mem_registry.count(buff_id) ) 
+      allocate_buffer( var, success );
+    else success = true;
+
+    if( success )
+    {
+      mem_detail& md = _mem_registry.at( buff_id );
+
+      md.reconcile_memstate( trans_id, sa_id, cc, var.parm_attr.dir );
+    }
+  }
+
+}
+
+void flash_cuda::_writeback_to_host( ulong tid, te_variable& arg)
+{
+  //TBD
+
+}
+
+void flash_cuda::_deallocate_buffer(ulong, te_variable& arg)
+{
+  //TBD
+
+
+}
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -531,18 +722,18 @@ void mem_detail::allocate( std::string tid, cuda_context ctx, DIRECTION dir, boo
 void mem_detail::deallocate( std::string tid, bool transfer_back )
 {
   auto mstate = get_mstate( tid );
-  if( (mstate->dir != DIRECTION::IN) && 
+  if( (mstate.dir != DIRECTION::IN) && 
        !is_flash() && transfer_back ) 
   {
-    if( mstate->dptr ) device_to_host( mstate->dptr.value() );
+    if( mstate.dptr ) device_to_host( mstate.dptr.value() );
     else std::cout << "No device ptr to transfer data (Dealloc)" << std::endl;   
 
   } else std::cout << "Cannot deallocate buffer" << std::endl;
 
-  if( mstate->dptr ) cuMemFree( mstate->dptr.value() );
+  if( mstate.dptr ) cuMemFree( mstate.dptr.value() );
   else std::cout << "No device ptr to Dealloc" << std::endl;   
 
-  mstate->dptr.reset(); 
+  mstate.dptr.reset(); 
 }
 
 void mem_detail::deallocate_all( bool transfer_back )
@@ -591,4 +782,102 @@ void mem_detail::device_to_device( CUcontext src_ctx, CUdeviceptr src_ptr, CUcon
 {
   cuMemcpyPeer ( dst_ptr, dst_ctx, src_ptr, src_ctx, sz );
 }
+
+void mem_detail::reconcile_memstate( ulong tid, ulong sa_id, cuda_context ctx, DIRECTION dir )
+{
+  std::string ctx_key = ctx.get_id();
+  auto tid_str = std::to_string( tid );
+
+  
+  //memory state on same device (sd)
+  auto ms_sd = std::ranges::find( _mstates, ctx_key, 
+                                  &decltype(_mstates)::value_type::get_cid);
+  
+  //memory state on different device (dd) 
+  auto ms_dd = std::ranges::find_if( _mstates, unary_diff{ctx_key}, 
+                                     &decltype(_mstates)::value_type::get_cid);
+ 
+  auto key = std::make_pair( tid, sa_id );
+
+  //Buffer on the same device
+  if( ms_sd != _mstates.end() ){
+    ms_sd->dir = dir;
+    ms_sd->tid = tid_str;
+
+    if( !ms_sd->in_use || (ms_dd->dir == DIRECTION::IN) ){
+     std::cout << "Reassigning memstate" << std::endl;  
+    }
+    else 
+    {
+      auto states = std::make_pair(*ms_sd, *ms_sd );
+
+      _pending_transfers.emplace(key, states );
+    }
+
+  }
+  //Buffer different devices
+  else if( ms_dd != _mstates.end() ){
+    allocate( tid_str, ctx, dir, false );
+    auto ms = get_memstate( std::to_string(tid) );
+
+    if( !ms_dd->in_use || (ms_dd->dir == DIRECTION::IN) ) 
+      device_to_device(ms_dd->ctx->cuContext,
+                       ms_dd->dptr.value(),
+                       ms.ctx->cuContext,
+                       ms.dptr.value() );
+    else
+    {
+      auto states = std::make_pair(*ms_dd, ms );
+
+      _pending_transfers.emplace(key, states );
+    }
+
+  }
+  //no buffers anywhere
+  else{
+    //buffer exists in this context/device
+    allocate( tid_str, ctx, dir );
+  }
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
