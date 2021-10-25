@@ -1,4 +1,4 @@
-#include <common.h>
+#include <utils/common.h>
 #include <optional>
 #include <variant>
 #include <thread>
@@ -9,9 +9,27 @@
 
 struct option
 {
-  std::variant<global_options, 
-               trans_options, 
-               subaction_options> opt;
+  option( global_options gops) { _gopts = gops; }
+  option( trans_options tops)  { _topts = tops; }
+  option( subaction_options sopts) { _sopts = sopts; }
+
+  template <typename Opt_t>
+  bool check( Opt_t opt)
+  {
+    if constexpr( std::is_same_v<Opt_t, global_options> )
+      return _gopts && (_gopts.value() == opt); 
+    else if constexpr( std::is_same_v<Opt_t, trans_options> )
+      return _topts && (_topts.value() == opt); 
+    else if constexpr( std::is_same_v<Opt_t, subaction_options> )
+      return _sopts && (_sopts.value() == opt); 
+ 
+    return false;
+  }
+
+  std::optional<global_options>    _gopts;
+  std::optional<trans_options>     _topts;
+  std::optional<subaction_options> _sopts;
+ 
 };
 
 typedef std::vector<option> options;
@@ -24,7 +42,7 @@ struct subaction
   runtime_vars rt_vars;
   std::vector<te_variable> kernel_args;
   std::vector<size_t> exec_parms;
-  std::vector<option> lopts;
+  options lopts;
   std::function<int()> pre_pred, post_pred;
 
   //first = true, last = false, none = intermediate
@@ -114,7 +132,21 @@ class transaction_interface : protected transaction_vars
     }
  
     template<typename T>
-    bool check_option( ulong, T, std::optional<ulong> tid = {} );
+    bool check_option( ulong sa_id, T ops, std::optional<ulong> tid_ovr = {} )
+    {
+      bool ret = false;
+      auto tr_id = tid_ovr.value_or( _tid.value() );
+      auto& sa_payload = find_sa_within_ta(sa_id, tr_id);
+      auto& options = sa_payload.lopts;
+
+      auto check_opt = std::bind( &option::check<T>, std::placeholders::_1, ops );
+  
+      bool exists = std::ranges::any_of( options, check_opt );
+
+      return ret;
+      
+      return false;
+    }
 
     options get_options( ulong, std::optional<ulong> tid = {} );
 

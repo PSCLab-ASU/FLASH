@@ -37,33 +37,13 @@ transaction_interface::transaction_interface()
 subaction&
 transaction_interface::add_sa2ta( ulong trans_id, subaction&& sa)
 {
+  ids key = std::make_pair( trans_id, sa.get_saId() );
+  auto& [t_mux, t_cv] = _events[key];
+  t_mux.unlock();
+
   return _transactions.emplace( trans_id, sa )->second;
 }
 
-
-template<typename T>
-bool transaction_interface::check_option( ulong sa_id, T option, std::optional<ulong> tid_ovr)
-{
-  bool ret = false;
-  auto tr_id = tid_ovr.value_or( _tid.value() );
-  auto& sa_payload = find_sa_within_ta(sa_id, tr_id);
-  auto& options = sa_payload.lopts;
-
-  //run through all the options
-  std::ranges::for_each( options, [&](auto& opt)
-  {
-     std::visit([&](auto& opt_var)
-     {
-       if( ( (short) opt_var) == ( (short) option) )
-         ret = true; 
-
-     }, opt.opt );
-
-  } );
-
-  return ret;
-
-}
 
 options transaction_interface::get_options(ulong sa_id, std::optional<ulong> tid_ovr ) 
 {
@@ -104,12 +84,17 @@ transaction_interface::get_pred( ulong sa_id )
   std::function<int()> dep_pred, succ_pred;
   std::vector<ids> dep_event_ids;
 
+  std::cout << __func__ << " Mark 0" << std::endl;
   auto [start_sa_It, end_sa_It] = _transactions.equal_range( _tid.value() );
+  std::cout << __func__ << " Mark 1" << std::endl;
 
   auto target_sa = find_sa_within_ta( sa_id );
+  std::cout << __func__ << " Mark 2" << std::endl;
 
   ids target_id = std::make_pair(_tid.value(), sa_id);
+  std::cout << __func__ << " Mark 3" << std::endl;
   auto& [t_mu, t_cv] = _events.at( target_id );
+  std::cout << __func__ << " Mark 4" << std::endl;
 
   //lock current subaction
   t_mu.lock();
@@ -175,5 +160,3 @@ subaction& transaction_interface::find_sa_within_ta(ulong sa_id, std::optional<u
 
 }
 
-template<>
-bool transaction_interface::check_option( ulong, trans_options, std::optional<ulong> );

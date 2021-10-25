@@ -15,10 +15,12 @@ std::shared_ptr<flash_rt> EXPORT flash_rt::get_runtime( std::string runtime_look
 
   if( _global_ptr )
   {
+    std::cout << "_global_ptr already exists" << std::endl;
     return _global_ptr->_customize_runtime(runtime_lookup);
   }
   else
   {
+    std::cout << "Creating new global pointer " << std::endl;
     _global_ptr = std::shared_ptr<flash_rt>( new flash_rt( "ALL" ) );
 
     return _global_ptr->_customize_runtime(runtime_lookup);
@@ -27,6 +29,7 @@ std::shared_ptr<flash_rt> EXPORT flash_rt::get_runtime( std::string runtime_look
 
 std::shared_ptr<flash_rt> flash_rt::_customize_runtime( std::string rt_key )
 {
+  std::cout << "customizing runtime..." << std::endl;
   return _rtrs_tracker.get_create_runtime( rt_key );
 }
 
@@ -34,8 +37,9 @@ std::shared_ptr<flash_rt> flash_rt::_customize_runtime( std::string rt_key )
 EXPORT flash_rt::flash_rt( std::string lookup)
 {
 
-  if( lookup != "ALL")
+  if( !lookup.empty() && lookup != "ALL" )
   {
+    std::cout<< "creating a flashrt with " << lookup << std::endl;
     _runtime_key = lookup;
     _backend = FlashableRuntimeFactory::Create( lookup );
     //get pointer to backend runtime
@@ -47,6 +51,7 @@ EXPORT flash_rt::flash_rt( std::string lookup)
   }
   else
   {
+    std::cout << "Returning nullptr" << std::endl;
     //this indicates to the system that it should
     //choose the runtime
     _runtime_ptr = nullptr;
@@ -106,15 +111,23 @@ std::string flash_rt::_recommend_runtime( const std::string& kernel_name,
 std::function<int()>
 flash_rt::_manage_buffers( std::string tid, std::string rtk, std::vector<te_variable>& kernel_args )
 {
+  std::cout << __func__ << " Mark 0" <<std::endl;
+
   auto exec_rt = _rtrs_tracker.get_create_runtime( rtk );
   std::function<int()> out;
+
+  std::cout << __func__ << " Mark 1" <<std::endl;
 
   int i =0;
   std::vector<int> indxs;
   for( auto& mem : kernel_args )
   {
+    std::cout <<" mem_id = " << mem.get_mem_id() << std::endl;
+    std::cout <<" "<< __func__ << " Mark Arg " << i << " : started" << std::endl;
     auto buffer_rt  = _rtrs_tracker.get_runtime_by_mem( mem.get_mem_id() );
+    std::cout << "    " << __func__ << "Mark 0" << " : inner" << std::endl;
     auto buffer_rtk = buffer_rt?buffer_rt->get_runtime_key():g_NoAlloc;
+    std::cout << "    " << __func__ << "Mark 1" << " : inner" << std::endl;
 
     if( rtk == buffer_rtk ) 
       std::cout << "Buffer " << mem.get_mem_id() << " already allocated" << std::endl;
@@ -124,10 +137,13 @@ flash_rt::_manage_buffers( std::string tid, std::string rtk, std::vector<te_vari
       if( res ) _rtrs_tracker.register_mem( tid, rtk, mem );
     }
     else if( rtk != buffer_rtk ) indxs.push_back( i );
+
+    std::cout <<" "<< __func__ << " Mark Arg " << i << " : end" << std::endl;
  
     i++;
   }
 
+  std::cout << __func__ << " Mark 2" <<std::endl;
   out = [this, rtk, indxs, kernel_args]()-> int
   {
 
@@ -138,11 +154,12 @@ flash_rt::_manage_buffers( std::string tid, std::string rtk, std::vector<te_vari
     return 0;
   };
 
+  std::cout << __func__ << " Mark 3" <<std::endl;
   return out;
 }
 
 status EXPORT flash_rt::execute(runtime_vars rt_vars,  uint num_of_inputs, 
-                         std::vector<te_variable> kernel_args, std::vector<size_t> exec_parms, options opt)
+                         std::vector<te_variable> kernel_args, std::vector<size_t> exec_parms, options& opt)
 {
   std::cout << "calling flash_rt::" << __func__ << std::endl;
   //need to store all arguments for later processing through process_transaction
@@ -170,12 +187,15 @@ status EXPORT flash_rt::execute(runtime_vars rt_vars,  uint num_of_inputs,
   //add transactio and subactionsa
   auto& sa_ref = _trans_intf.add_sa2ta( trans_id, std::move(sa) );
   
+  std::cout << __func__ << " Mark 6" << std::endl;
   auto deferred_transfer = 
        _manage_buffers( std::to_string(trans_id), rtk, kernel_args );
   //check predecessor conditionals
   //
+  std::cout << __func__ << " Mark 7" << std::endl;
   auto [dep_pred, succ_pred] = _trans_intf(trans_id).get_pred(suba_id);
 
+  std::cout << __func__ << " Mark 8" << std::endl;
   auto pred = [dep_pred, deferred_transfer]()->int
   {
     dep_pred();
@@ -183,6 +203,7 @@ status EXPORT flash_rt::execute(runtime_vars rt_vars,  uint num_of_inputs,
     return 0;
   };
 
+  std::cout << __func__ << " Mark 9" << std::endl;
   sa_ref.set_preds( std::move(pred), std::move(succ_pred) );
 
 
@@ -249,7 +270,7 @@ ulong EXPORT flash_rt::create_transaction()
 
 status EXPORT flash_rt::process_transaction( ulong tid )
 {
-  std::cout << "calling flash_rt::" << __func__ <<"("<<tid <<")" << std::endl;
+  std::cout << "-----------------------------------------------------------------------calling flash_rt::" << __func__ <<"("<<tid <<")" << std::endl;
   ///////////////////////////////////////////////////////////
   std::vector<status> statuses;
   strings rtks;
@@ -316,7 +337,7 @@ status EXPORT flash_rt::process_transaction( ulong tid )
       }
       else 
       {
-        std::cout << "Could not find wid" << std::endl;
+        std::cout << "-Could not find wid-" << std::endl;
         return status{-1};
       }
 
@@ -353,11 +374,13 @@ runtimes_resource_tracker::get_create_runtime(std::string rtk )
 {
   if( _runtime_ptrs.count( rtk ) == 0 )
   {
+    std::cout << "Found a runtime...." << rtk << std::endl;
     //auto srtp = std::make_shared<flash_rt>(rtk);
     auto srtp = std::shared_ptr<flash_rt>(new flash_rt( rtk) );
     _runtime_ptrs[rtk] = srtp;
   }
 
+  std::cout << "Returning a runtime...." << rtk << std::endl;
   return _runtime_ptrs[rtk];
 }
 
@@ -384,6 +407,7 @@ runtimes_resource_tracker::get_runtime_by_kname( std::string kname )
 runtimes_resource_tracker::shared_flash_runtime
 runtimes_resource_tracker::get_runtime_by_mem( std::string mem_id )
 {
+  std::cout << __func__ << " Mark 0" << std::endl;
   auto rt_sptr = _get_runtime_by( mem_id );
   return rt_sptr;
 }
@@ -391,11 +415,12 @@ runtimes_resource_tracker::get_runtime_by_mem( std::string mem_id )
 runtimes_resource_tracker::shared_flash_runtime
 runtimes_resource_tracker::_get_runtime_by( std::string id )
 {
-
+  std::cout << __func__ << " Mark 0" << std::endl;
   auto rts = get_all_runtimes_by( id );
  
   if( rts.size() == 0 ) {
-   std::range_error("Could not find valid runtime for: " + id );
+    std::cout << "Buffer id = " << id << " not registered " << std::endl;
+    return nullptr;
   }
 
   return rts[0];
@@ -422,10 +447,13 @@ auto
 runtimes_resource_tracker::get_all_runtimes_by( const std::string& id )
 -> std::vector<shared_flash_runtime>
 {
+
   std::vector<shared_flash_runtime> out;
 
+  std::cout << __func__ << " Mark 0" << std::endl;
   for(auto[rtk, summary_obj] : _resources )
   {
+    std::cout <<"  "<< __func__ << " Mark 0" << std::endl;
     std::visit([&](auto&& obj)
     {
       if constexpr (std::is_same_v<decltype(obj), summary_kernel > )
@@ -442,6 +470,10 @@ runtimes_resource_tracker::get_all_runtimes_by( const std::string& id )
     //break if we found a runtime
   }
 
+  std::cout << __func__ << " : end" << std::endl;
+  std::cout << __func__ << " : out.size() = " << out.size() << std::endl;
+ 
+ 
   return out;
 }
 

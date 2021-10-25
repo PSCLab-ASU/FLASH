@@ -85,14 +85,14 @@ class flash_rt
 
     std::optional<std::string> get_runtime_key() { return _runtime_key; }
 
-    static std::shared_ptr<flash_rt> get_runtime( std::string="" );
+    static std::shared_ptr<flash_rt> get_runtime( std::string );
  
     status register_kernels( size_t, kernel_t [], std::string [], 
                              std::optional<std::string> [],
                              std::optional<std::string> []  );
 
     status execute( runtime_vars, uint, std::vector<te_variable>, 
-                    std::vector<size_t>, options ); 
+                    std::vector<size_t>, options& ); 
    
     status allocate_buffer( te_variable& );
 
