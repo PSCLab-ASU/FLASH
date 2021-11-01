@@ -17,6 +17,8 @@ class FlashableRuntimeFactory
     static bool Register(const std::string, FlashableRuntimeInfo);
 
     static std::optional<FlashableRuntimeInfo> Create( const std::string &);
+
+    static std::vector<std::string> List();
   
     static map_type& GetRuntimeMap()
     {

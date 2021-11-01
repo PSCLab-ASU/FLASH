@@ -45,6 +45,13 @@ class runtimes_resource_tracker
     std::vector<shared_flash_runtime>
     get_all_runtimes_by( const std::string& );
 
+    std::vector<shared_flash_runtime>
+    get_all_runtimes( )
+    {
+      std::string _;
+      return get_all_runtimes_by(_);
+    }
+
     shared_flash_runtime get_runtime_by_kname( std::string );
 
     shared_flash_runtime get_runtime_by_mem( std::string );
@@ -53,15 +60,16 @@ class runtimes_resource_tracker
 
     void register_mem( std::string, std::string, const te_variable& );
 
-    bool kernel_exists( std::string, std::string, std::string ); //runtime_key, kname, kimpl
+    bool kernel_exists( std::string, const kernel_desc& ); //runtime_key, kname, kimpl
   
     bool transfer_buffers( o_string, o_string, te_variables );
+
+    std::string get_base_loc( std::string, std::string );
 
   private:
 
     void _customize_runtime( std::string );
 
-    std::string _get_base_loc( std::string, std::string );
       
     shared_flash_runtime _get_runtime_by( std::string );
     
@@ -105,6 +113,11 @@ class flash_rt
 
     status process_transaction( ulong );
 
+    std::shared_ptr<IFlashableRuntime> get_backend() 
+    {
+      return _runtime_ptr;
+    }
+
 
   private:
   
@@ -112,7 +125,8 @@ class flash_rt
 
     std::shared_ptr<flash_rt> _customize_runtime( std::string );
 
-    void _register_kernel(std::string rtk, const kernel_desc& );
+    void _try_register_kernel(std::vector<kernel_desc>&, 
+                              std::optional<std::string> );
 
     std::string _recommend_runtime(const std::string &,
                                    const std::vector<te_variable>& );

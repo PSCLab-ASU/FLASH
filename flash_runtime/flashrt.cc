@@ -2,7 +2,7 @@
 #include <flash_runtime/transaction_interface.h>
 #include <ranges>
 #include <algorithm>
-
+#include <functional>
 
 //std::shared_ptr<flash_rt> flash_rt::_global_ptr;
 
@@ -29,7 +29,7 @@ std::shared_ptr<flash_rt> EXPORT flash_rt::get_runtime( std::string runtime_look
 
 std::shared_ptr<flash_rt> flash_rt::_customize_runtime( std::string rt_key )
 {
-  std::cout << "customizing runtime..." << std::endl;
+  std::cout << "customizing runtime for " << rt_key <<  std::endl;
   return _rtrs_tracker.get_create_runtime( rt_key );
 }
 
@@ -51,18 +51,30 @@ EXPORT flash_rt::flash_rt( std::string lookup)
   }
   else
   {
-    std::cout << "Returning nullptr" << std::endl;
+     std::cout << "Returning nullptr" << std::endl;
+    _runtime_key = g_NoRuntime;
     //this indicates to the system that it should
     //choose the runtime
     _runtime_ptr = nullptr;
+    //populating  resource tracker
+    for(auto rtk : FlashableRuntimeFactory::List() ) 
+    {
+      std::cout << "Registering runtime : " << rtk << std::endl;
+      _rtrs_tracker.get_create_runtime( rtk );
+    }
+       
   }
 }
 
 std::string flash_rt::_recommend_runtime( const std::string& kernel_name,
                                           const std::vector<te_variable>& kernel_args )
 {
+  std::cout << __func__ << " Started " << std::endl;
+  std::cout << "  Looking for kernel name " << kernel_name <<  std::endl; 
   auto kernel_rts = _rtrs_tracker.get_all_runtimes_by( kernel_name );
   std::vector<std::string> kernel_rtks, buffer_rtks;
+
+  std::cout << "kernel_rts size = " << kernel_rts.size() << std::endl;
 
   std::ranges::transform( kernel_rts, std::back_inserter(kernel_rtks),
                           [](auto kernel_rt)
@@ -73,6 +85,8 @@ std::string flash_rt::_recommend_runtime( const std::string& kernel_name,
 
   } );
 
+  std::cout << " " << "got list of keys size = " << kernel_rtks.size() << std::endl;
+  for(auto rk : kernel_rtks ) std::cout << "    " << rk << std::endl;
   /////////////////////////////////////////////////////////////////////////////////////////////
   auto fmem_pred = [](auto arg) -> bool
   {  
@@ -94,9 +108,12 @@ std::string flash_rt::_recommend_runtime( const std::string& kernel_name,
       return g_NoAlloc;
 
   } );
+  std::cout << " " << "finished analyzing buffers, size = " << buffer_rtks.size() << std::endl;
   ///////////////////////////////////////////////////////////////////////////////////////////// 
-  auto none_alloc    = std::ranges::all_of( buffer_rtks, unary_equals{ std::string("NoAlloc") } );  
+  auto none_alloc    = std::ranges::all_of( buffer_rtks, unary_equals{ g_NoAlloc } );  
+  std::cout << "  Mark 1" << std::endl;
   auto is_colocated  = std::ranges::all_of( buffer_rtks, unary_equals{ kernel_rtks[0] } );  
+  std::cout << "  Mark 2" << std::endl;
 
   if( none_alloc ) 
     std::cout << "None of the flash_memory buffers allocated! : " << kernel_rtks[0] << std::endl;
@@ -173,7 +190,7 @@ status EXPORT flash_rt::execute(runtime_vars rt_vars,  uint num_of_inputs,
  
   std::string rtk = _runtime_key.value_or(g_NoRuntime);
 
-  if( _runtime_key == g_NoRuntime )
+  if( rtk == g_NoRuntime )
   {
     auto kname_ovr   = rt_vars.get_kname_ovr();
     auto kernel_name = kname_ovr.value_or( rt_vars.get_lookup() );
@@ -181,6 +198,7 @@ status EXPORT flash_rt::execute(runtime_vars rt_vars,  uint num_of_inputs,
     rtk = _recommend_runtime( kernel_name, kernel_args);
   }
   
+  std::cout << "runtime selected : " << rtk << std::endl;
   auto sa = subaction{ suba_id, rtk, num_of_inputs, rt_vars, kernel_args, 
                        exec_parms, opt };
 
@@ -217,10 +235,16 @@ status EXPORT flash_rt::register_kernels( size_t num_kernels, kernel_t kernel_ty
   std::cout << "calling flash_rt::" << __func__ << std::endl;
 
   std::vector<kernel_desc> kernel_inputs;
+  std::string rtk = _runtime_key.value_or(g_NoRuntime);
 
   auto pack_data = [&](int index)-> kernel_desc
   {
-    if( kname_ovrs == nullptr )
+    std::cout << "base kernel_name = " << kernel_names[index] << ", override = ";
+
+    if( kname_ovrs[index] ) std::cout << kname_ovrs[index].value() << std::endl;
+    else std::cout << "No Override" << std::endl; 
+
+    if( !kname_ovrs[index] )
       return kernel_desc{kernel_types[index], kernel_names[index], 
                          kernel_names[index], inputs[index]};
     else
@@ -229,30 +253,27 @@ status EXPORT flash_rt::register_kernels( size_t num_kernels, kernel_t kernel_ty
    
   };
 
+  auto k_exists = std::bind(&runtimes_resource_tracker::kernel_exists, 
+                            &_rtrs_tracker, rtk, std::placeholders::_1); 
+
   //check if thier is a runtime existsa
-  auto kernels = std::views::iota( (size_t) 0, num_kernels ) | std::views::transform(pack_data);
-  
+  auto kernels = std::views::iota( (size_t) 0, num_kernels ) | 
+                 std::views::transform(pack_data) |
+                 std::views::filter( std::not_fn(k_exists) );
+
   //pack the inputs into
-  std::ranges::for_each(kernels, [&](auto input){ kernel_inputs.push_back(input); } );
+  std::ranges::for_each(kernels, [&](auto input)
+  { 
+    std::cout << "  Pushing data into kernel_inputs" << std::endl;
+    kernel_inputs.push_back(input);
+
+  } ); 
+ 
   
-  if( _runtime_ptr )
-  {
-    std::vector<bool> successes;
-    _runtime_ptr->register_kernels( kernel_inputs, successes );
+  if( !kernel_inputs.empty() ) _try_register_kernel( kernel_inputs, rtk );
 
-    //go through each success registration and add it to the registry
-    std::ranges::transform(kernel_inputs, successes, std::back_inserter(successes),
-    [&](kernel_desc& kd, const bool& success)
-    {
-      if( success )  _register_kernel( _runtime_key.value(), kd);
-      return false;
-    } );
-       
-  }
-  else std::cout << "No runtime selected for registration" << std::endl;
-
- std::cout << "completed flash_rt::" << __func__ << std::endl;
- return {}; 
+  std::cout << "completed flash_rt::" << __func__ <<  std::endl;
+  return {}; 
 }
 
 status flash_rt::allocate_buffer( te_variable& )
@@ -270,7 +291,7 @@ ulong EXPORT flash_rt::create_transaction()
 
 status EXPORT flash_rt::process_transaction( ulong tid )
 {
-  std::cout << "-----------------------------------------------------------------------calling flash_rt::" << __func__ <<"("<<tid <<")" << std::endl;
+  std::cout << "calling flash_rt::" << __func__ <<"("<<tid <<")" << std::endl;
   ///////////////////////////////////////////////////////////
   std::vector<status> statuses;
   strings rtks;
@@ -298,7 +319,9 @@ status EXPORT flash_rt::process_transaction( ulong tid )
     //sort by subaction id
     std::ranges::sort( pipeline, {}, &subaction::subaction_id);
 
-    std::cout << "---- sorting complete" << std::endl;
+    std::cout << "******************************************************************************" << std::endl;
+    std::cout << "****************************Execution Section*********************************" << std::endl;
+    std::cout << "******************************************************************************" << std::endl;
     //submit subactions
     std::for_each( pipeline.begin(), pipeline.end(), [&](subaction& stage)
     {
@@ -311,16 +334,27 @@ status EXPORT flash_rt::process_transaction( ulong tid )
       auto base_kname = rt_vars.get_lookup();
       auto kname_ovr  = rt_vars.get_kname_ovr();
       auto kname_impl = rt_vars.get_kimpl();
-      register_kernels( 1, &ktype, &base_kname, &kname_ovr, &kname_impl ); 
+      //register_kernels( 1, &ktype, &base_kname, &kname_ovr, &kname_impl ); 
      
       auto runtime  = _rtrs_tracker.get_create_runtime( stage.get_rtk() ); 
       rtks.push_back( stage.get_rtk() );                    
-
-      statuses.push_back( runtime->execute(rt_vars, num_of_inputs, kernel_args, exec_parms, opts ) );
+      
+      std::cout << "------------------------------------------------" << std::endl;
+      std::cout << "executing " << kname_ovr.value_or("NoKernel") << ", status = ";
+      //statuses.push_back( runtime->execute(rt_vars, num_of_inputs, kernel_args, exec_parms, opts ) );
+      statuses.push_back( _runtime_ptr->execute(tid, sa_id ) );
+      std::cout << "In progress..." << std::endl;
+      std::cout << "------------------------------------------------" << std::endl;
 
     });
 
-    std::cout << "---- foreach complete" << std::endl;
+    std::cout << "******************************************************************************" << std::endl;
+    std::cout << "******************************************************************************" << std::endl;
+    std::cout << "******************************************************************************" << std::endl;
+
+    std::cout << "******************************************************************************" << std::endl;
+    std::cout << "********************************Wait Section**********************************" << std::endl;
+    std::cout << "******************************************************************************" << std::endl;
     ///wait for work to complete
     auto completed = statuses | std::views::filter( unary_equals{true} ) |  std::views::transform([&](auto stat)
     {
@@ -359,9 +393,64 @@ status EXPORT flash_rt::process_transaction( ulong tid )
   return {};
 }
 
-void flash_rt::_register_kernel(std::string rtk, const kernel_desc& kd)
+void flash_rt::_try_register_kernel(std::vector<kernel_desc>& kds, std::optional<std::string> rtk)
 {
-  _rtrs_tracker.register_kernel(rtk, kd );
+
+  std::vector<bool> successes;
+  std::string rkey;
+
+  std::cout << "calling flash_rt::" << __func__ << std::endl;
+
+  auto
+  update_loc = [&rkey](auto& kd) 
+  {
+    if( !kd.get_kernel_def() || (kd.get_kernel_def() && (kd.get_kernel_def().value() == g_NotImpl)) )
+    {
+      auto base_name = kd.get_base_kname();
+      auto base_loc  = _rtrs_tracker.get_base_loc( rkey, base_name );
+      kd.set_kernel_def( base_loc );
+
+      std::cout << "Overriding location for " << kd.get_kernel_name() << 
+                " to location of " << base_name << " @ " << base_loc << std::endl; 
+    }  
+  };
+
+  auto
+  register_func = [&](auto rt)->void
+  {
+    rkey = rt->get_runtime_key().value();
+    std::cout << "Trying to Register the following kernels in " << rkey << " : " << 
+                 (bool) rt->get_backend() <<  std::endl;
+
+    std::ranges::for_each( kds, update_loc);
+
+    rt->get_backend()->register_kernels( kds, successes );
+
+ 
+    //go through each success registration and add it to the registry
+    std::ranges::transform(kds, successes, std::back_inserter(successes),
+    [&](const kernel_desc& kd, const bool& success)
+    {
+      std::cout << "  " << kd.get_kernel_name() << ", status =  " << success << std::endl;
+      if( success ) _rtrs_tracker.register_kernel(rkey, kd );
+      return false;
+    } );
+    
+  };
+
+  if( !rtk || ( rtk && (rtk.value() == g_NoRuntime) ) )
+  {
+    std::cout << "  Testing all runtimes" << std::endl;
+    for( auto runtime : _rtrs_tracker.get_all_runtimes() ) 
+      register_func( runtime );
+  }
+  else 
+  {
+    std::cout << "  Testing single runtime " << (bool) rtk <<  std::endl;
+    auto runtime  = _rtrs_tracker.get_create_runtime( rtk.value() ); 
+    register_func( runtime );
+  }
+
 }
 
 
@@ -374,7 +463,7 @@ runtimes_resource_tracker::get_create_runtime(std::string rtk )
 {
   if( _runtime_ptrs.count( rtk ) == 0 )
   {
-    std::cout << "Found a runtime...." << rtk << std::endl;
+    std::cout << "Registering runtime with the resource tracker...." << rtk << std::endl;
     //auto srtp = std::make_shared<flash_rt>(rtk);
     auto srtp = std::shared_ptr<flash_rt>(new flash_rt( rtk) );
     _runtime_ptrs[rtk] = srtp;
@@ -450,19 +539,30 @@ runtimes_resource_tracker::get_all_runtimes_by( const std::string& id )
 
   std::vector<shared_flash_runtime> out;
 
-  std::cout << __func__ << " Mark 0" << std::endl;
+  auto no_all = [](auto rt)
+  {
+    return !(rt.first == g_NoRuntime);
+  };
+
+  if( id.empty() ) 
+    return (std::ranges::copy(_runtime_ptrs | std::views::filter(no_all) | std::views::values, 
+                              std::back_inserter(out) ), out);
+
+  std::cout << __func__ << " Mark 0 : resournce size() = " << _resources.size() <<  std::endl;
   for(auto[rtk, summary_obj] : _resources )
   {
     std::cout <<"  "<< __func__ << " Mark 0" << std::endl;
-    std::visit([&](auto&& obj)
+    std::visit([&](auto obj)
     {
       if constexpr (std::is_same_v<decltype(obj), summary_kernel > )
       {
+        std::cout << "obj.kernel_name = " << obj.kernel_name << std::endl;
         if( obj.kernel_name == id )
           out.push_back( get_create_runtime( rtk ) ); 
       }
       else if constexpr (std::is_same_v<decltype(obj), summary_flash_mem> )
       {
+        std::cout << "obj.id = " << obj.id << std::endl;
         if( obj.id == id )
           out.push_back( get_create_runtime( rtk ) ); 
       }
@@ -481,19 +581,22 @@ void
 runtimes_resource_tracker::register_kernel( std::string rtk, const kernel_desc& kd )
 {
   auto base_kname = kd.get_base_kname();             //kernel name
-  auto base_loc   = _get_base_loc(rtk, base_kname);  //location
+  auto base_loc   = get_base_loc( rtk, base_kname);  //location
   auto ovr_kname  = kd.get_ovr_kname();            //optional kernel name
   auto ovr_loc    = kd.get_kernel_def();             //optional location
 
   std::string kname = ovr_kname?ovr_kname.value():base_kname;
   std::string loc   = ovr_loc?ovr_loc.value():base_loc;
 
+  std::cout << "entering runtimes_resource_tracker::" << __func__ << std::endl;
+  std::cout << "Registering " << kname << " @ " << loc << std::endl;
+
   summary_kernel sk{ kname, loc };
 
   _resources.emplace(rtk, sk);
 }
 
-std::string runtimes_resource_tracker::_get_base_loc( std::string rtk, std::string kname)
+std::string runtimes_resource_tracker::get_base_loc( std::string rtk, std::string kname)
 {
   auto rt_resources = _resources.equal_range( rtk );
   std::optional<std::string> location;
@@ -520,9 +623,51 @@ std::string runtimes_resource_tracker::_get_base_loc( std::string rtk, std::stri
 }
 
 
-bool runtimes_resource_tracker::kernel_exists( std::string rtk, std::string kname, std::string kernel_impl)
+bool runtimes_resource_tracker::kernel_exists( std::string rtk, const kernel_desc & kd)
 {
-  return true;
+  std::cout << "entering " <<__func__ << " " << rtk<< std::endl;
+
+  auto [stIt, endIt] = _resources.equal_range( rtk );
+
+  if( rtk == g_NoRuntime )
+  {
+    stIt  = std::begin(_resources);
+    endIt = std::end(_resources);
+  }
+
+  std::string kname  = kd.get_kernel_name();
+  std::string loc    = kd.get_kernel_def().value_or(g_NotImpl);
+
+  std::cout << "res.size() = " << _resources.size() << ", " << "kname = " << kname << ", loc = " << loc << std::endl;
+  if( stIt == endIt ) std::cout << "No resources in resources list" << std::endl;
+  auto ret = std::ranges::any_of( stIt, endIt, [&]( auto var_res )
+  {
+    bool ret = false;
+
+    std::visit( [&](auto res)
+    {
+      if constexpr( std::is_same_v<summary_kernel, decltype(res)> )
+      {
+        std::cout << "kname : " << kname <<" == " << res.kernel_name <<" , " <<
+                  "loc : " << loc << " == " << res.kernel_location << std::endl;
+
+        ret = ( ( kname == res.kernel_name) && 
+              ( (loc == res.kernel_location) || (loc == g_NotImpl) ) );
+        if(ret) std::cout << "  Found kernel in resources : " << kname << " @ " << loc << std::endl;
+      }
+      else
+      {
+        std::cout << "  Other type found! " << std::endl;
+      }
+
+    }, var_res.second );
+   
+
+    return ret;
+
+  } );
+
+  return ret;
 }
 
 bool runtimes_resource_tracker::transfer_buffers( o_string dst_rtk, o_string src_rtk, te_variables buffs )

@@ -151,6 +151,7 @@ class RuntimeObj
       //register all functions
       std::cout << std::boolalpha;
       std::string base_knames[N]  = { ts.get_method()... };
+      o_string kname_ovrs[N]      = { ts.get_method_ovr()... };
       kernel_t kernel_types[N]    = { ts.get_kernel_type()... };
 
       constexpr std::array<bool, N> is_same( {std::is_same_v<std::string, typename Ts::program_t>...} );
@@ -161,7 +162,7 @@ class RuntimeObj
         std::cout << "All types are strings" << std::endl;
         std::optional<std::string> inputs[N] = { ts.get_kernel_details()... };
 
-        _runtimeImpl->register_kernels(N, kernel_types, base_knames, nullptr, inputs);
+        _runtimeImpl->register_kernels(N, kernel_types, base_knames, kname_ovrs, inputs);
       }
       else std::cout << "Different types detected" << std::endl;
       std::cout << "RuntimeObj Initialized" << std::endl;
@@ -270,19 +271,27 @@ class RuntimeObj
         {
             std::cout << "executing subaction" << std::endl;
             std::vector<size_t> exec_params;
+            std::string base_kname  = kernel.get_method();
+            o_string kname_ovr      = kernel.get_method_ovr();
+            kernel_t kernel_type    = kernel.get_kernel_type();
+            o_string input          = kernel.get_kernel_details();
 
             size_t num_inputs = Kernel::Get_NInArgs() + 
                                 Kernel::Get_NInOutArgs();
-            std::cout << "Executing '" << kernel.get_method() << "'..." << std::endl;
+            std::cout << "Executing '" << kname_ovr.value_or(base_kname) << "'..." << std::endl;
             constexpr size_t NArgs = std::tuple_size_v<P>;
-            
-            
+                        
             auto _te_buffers = erase_tuple( buffers, buffer_attrs, sizes );            
 
-            auto _rt_vars    = runtime_vars{ kernel.get_method(),           //Base kernel name
-                                             kernel.get_kernel_type(),
-                                             kernel.get_kernel_details(),   //method_override
-                                             kernel.get_method_ovr(),       //new method detials
+
+            _runtimeImpl->register_kernels(1, &kernel_type, &base_kname, &kname_ovr, &input);
+
+            std::cout << "Finished registering of runtime kernel in exec" << std::endl;
+
+            auto _rt_vars    = runtime_vars{ base_kname,      //Base kernel name
+                                             kernel_type,
+                                             input,           //method_override
+                                             kname_ovr,       //new method detials
                                              kernel.simplify_kattrs()  };
 
 	    //set transactio information
@@ -662,9 +671,30 @@ struct KernelDefinition
     kernel_t_decl<k_type> get_kernel_details(){ return _input_program; }
     auto                  get_method_ovr()    { return _kernel_name; }
 
-    KernelDefinition ( kernel_t_decl<k_type> inp={}, 
-                       std::optional<std::string> kernel_name={} )
-    : _input_program(inp), _kernel_name(kernel_name) { }
+    KernelDefinition ( kernel_t_decl<k_type> kname_inp1={}, 
+                       std::optional<std::string> kname_inp2={} )
+    { 
+      bool is_file1 = is_file( kname_inp1 );
+      bool is_file2 = is_file( kname_inp2 );
+
+      if( is_file1 ) 
+      {
+        _input_program = kname_inp1;
+        if( !kname_inp2 ) _kernel_name = get_method();
+        else _kernel_name = kname_inp2;
+      } 
+      else if( is_file2 )
+      {
+        _input_program = kname_inp2;
+        if( !kname_inp1 ) _kernel_name = get_method();
+        else _kernel_name = kname_inp1;
+        
+      }
+      else if( kname_inp1 )
+      { 
+        _kernel_name = kname_inp1;
+      }
+    }
 
 
     static constexpr size_t Get_NArgs()

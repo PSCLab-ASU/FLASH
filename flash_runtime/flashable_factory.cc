@@ -26,4 +26,13 @@ std::optional<FlashableRuntimeInfo>
   return {};
 }
 
+std::vector<std::string> FlashableRuntimeFactory::List()
+{
+  std::vector<std::string> out;
+  auto& runtimes = GetRuntimeMap();
 
+  for( auto& rt : runtimes ) out.push_back( rt.first );
+
+  return out;
+
+}
