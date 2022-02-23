@@ -109,6 +109,11 @@ class flash_rt
       return _runtime_ptr->wait( wid );
     }   
 
+    auto execute( ulong tid, ulong sa_id )
+    {
+      return _runtime_ptr->execute( tid, sa_id );
+    }
+
     ulong create_transaction();
 
     status process_transaction( ulong );
@@ -138,7 +143,7 @@ class flash_rt
     std::optional<FlashableRuntimeInfo>  _backend;
     std::shared_ptr<IFlashableRuntime>   _runtime_ptr;
 
-    transaction_interface _trans_intf;
+    inline static transaction_interface  _trans_intf;
 
     inline static std::shared_ptr<flash_rt> _global_ptr; 
     

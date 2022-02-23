@@ -287,13 +287,17 @@ class RuntimeObj
             _runtimeImpl->register_kernels(1, &kernel_type, &base_kname, &kname_ovr, &input);
 
             std::cout << "Finished registering of runtime kernel in exec" << std::endl;
+            std::cout << "rt_vars base_kname = " << base_kname << std::endl;
+            std::cout << "rt_vars kname_ovr = " << kname_ovr.value_or("NoKernel") << std::endl;
 
             auto _rt_vars    = runtime_vars{ base_kname,      //Base kernel name
                                              kernel_type,
-                                             input,           //method_override
                                              kname_ovr,       //new method detials
+                                             input,           //method_override
                                              kernel.simplify_kattrs()  };
 
+            std::cout << "rt_vars base_kname = " << _rt_vars.get_lookup() << std::endl;
+            std::cout << "rt_vars kname_ovr = " << _rt_vars.get_kname_ovr().value_or("NoKernel") << std::endl;
 	    //set transactio information
             _rt_vars.associate_transactions( trans_sub_id );
 

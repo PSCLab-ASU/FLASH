@@ -48,6 +48,14 @@ struct subaction
   //first = true, last = false, none = intermediate
   std::optional<bool> first_last_int; 
 
+  //table references
+  o_string _index_table_key;
+
+  void set_itable_key( std::string key )
+  {
+    _index_table_key = key;
+  }
+
   void set_first(){ first_last_int = true;  }
   bool is_first() { return first_last_int.value_or(false); }
 
@@ -61,7 +69,9 @@ struct subaction
   void set_intrm(){ first_last_int.reset(); }
   bool is_intrm() { return !( (bool) first_last_int); }
 
-  auto get_options(){ return lopts; }
+  options  get_options(){ return lopts; }
+
+  te_attrs get_kattrs(){ return get_rtvars().kAttrs; }
 
   ulong get_saId() { return subaction_id; }
 
@@ -79,6 +89,8 @@ struct subaction
   bool intersect( const subaction& ) const;
 
   const runtime_vars& get_rtvars(){ return rt_vars; }
+
+  bool need_index_table() { return ( lopts.size() > 0); }
 
   auto input_vars( ) 
   { 
@@ -103,7 +115,7 @@ struct transaction_vars
                               std::condition_variable>;
 
   private:
-    std::optional<ulong> _tid;
+    std::optional<ulong> _tid=0;
     std::multimap<ulong, subaction> _transactions;
     std::map<ulong, option> _gopts;
     std::map<ids, event_var> _events;

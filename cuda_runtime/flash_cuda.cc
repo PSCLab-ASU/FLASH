@@ -53,7 +53,7 @@ flash_cuda::flash_cuda()
 
 }
 
-status flash_cuda::allocate_buffer( te_variable& arg, bool& )
+status flash_cuda::allocate_buffer( te_variable& arg, bool& success )
 {
 
   auto dir         = arg.parm_attr.dir;
@@ -65,6 +65,8 @@ status flash_cuda::allocate_buffer( te_variable& arg, bool& )
   std::string key = arg.get_mem_id();
 
   _mem_registry.emplace(key, md );
+
+  success = true;
 
   return status{};
 }
@@ -116,10 +118,11 @@ status flash_cuda::set_trans_intf( std::shared_ptr<transaction_interface> trans_
 }
 
 status flash_cuda::register_kernels( const std::vector<kernel_desc>& kds, 
-                                     std::vector<bool> & ) 
+                                     std::vector<bool> & successes ) 
 {
   
   std::cout << "calling flash_cuda::" << __func__<<  std::endl;
+  bool found=false;
   for( auto kernel : kds )
   {
     
@@ -128,7 +131,8 @@ status flash_cuda::register_kernels( const std::vector<kernel_desc>& kds,
     {
       std::cout << "registering " << kernel._kernel_name.value()
 	        <<" in "<< kernel._kernel_definition.value() << std::endl;
-      _process_external_binary( kernel );
+      _process_external_binary( kernel, found );
+      successes.push_back(found);
     }
     else
       std::cout << "registration format not supported" << std::endl;
@@ -259,47 +263,53 @@ status flash_cuda::wait( ulong  wid)
 //                              std::vector<te_variable> kernel_args, std::vector<size_t> exec_parms)
 status flash_cuda::execute( ulong trans_id, ulong sa_id )
 {
-  std::cout << "Executing from cuda-flash_runtime..." << __func__ << std::endl;
+  printf("\nExecuting form cuda-flash_runtime... : tid = %llu, sid = %llu \n", trans_id, sa_id );
   //////////////////////////////////////////////////////////////////////////////
   ulong wid = random_number(); 
   auto& sa_payload = _trans_intf->find_sa_within_ta(sa_id, trans_id);
   auto [num_of_inputs, rt_vars, kernel_args, 
          exec_parms, pre_pred, post_pred] = sa_payload.input_vars();
+
+  auto sa_kattrs = sa_payload.get_kattrs();
+  bool need_table = sa_payload.need_index_table();
+
   //////////////////////////////////////////////////////////////////////////////
-  std::cout << "Executing : " << rt_vars.get_lookup() <<" ..."<< std::endl;
- 
+  auto kname = rt_vars.get_kname_ovr().value_or( rt_vars.get_lookup() );
+  printf( "Executing %s... \n", kname.c_str() );
   //set current context to context with the least amount of work
   _set_least_active_gpu_ctx();
   std::string kernel_name = rt_vars.kernel_name_override?rt_vars.kernel_name_override.value():rt_vars.get_lookup();
   auto func_binary = _kernel_lib.get_cufunction_for_current_ctx( kernel_name, rt_vars.kernel_impl_override );
   auto ctx_key     = _kernel_comps.get_current_ctx_key();
   //auto input_kargs = std::vector<te_variable>( kernel_args.begin(), kernel_args.begin() + num_of_inputs);
+    //launch kernel
+  std::vector<size_t> dims(8, 1);
+  dims[7] = dims[6] = 0;
+  std::ranges::copy(exec_parms, dims.begin() );
+
+  o_string table_id;
+  if( need_table ) table_id = index_table::preview_table_id( dims );
 
   if( func_binary )
   {
     int i =0;
     bool defer=false;
-    std::cout << "Found executable kernel..." << std::endl;
-    //launch kernel
-    std::vector<size_t> dims(8, 1);
-    dims[7] = dims[6] = 0;
-    std::ranges::copy(exec_parms, dims.begin() );
 
     std::ranges::copy( dims, std::ostream_iterator<size_t>{std::cout, ", "} );
     std::cout << std::endl;
     int ret = CUDA_SUCCESS;
     std::function<int()> deferred_launch;
 
-    auto first_sa = !std::ranges::any_of(_pending_jobs, [trans_id](auto pjob)
-                    { 
-                      return pjob.second.get_tid() == trans_id;
-                    });
-
-    if( first_sa ) //eager
+    if( sa_payload.is_first() ) //eager
     {
+      printf("Found the first subaction\n");
+
       pre_pred();   
-      _assess_mem_buffers( trans_id, sa_id, kernel_args );
-      std::vector<CUdeviceptr> device_buffers = _checkout_device_buffers( trans_id, kernel_args, defer );
+      _assess_mem_buffers( trans_id, sa_id, kernel_args, dims, sa_kattrs );
+      printf("Completed memstate construction....\n");
+
+      std::vector<CUdeviceptr> device_buffers = _checkout_device_buffers( trans_id, kernel_args, table_id, defer );
+      printf("Number of device buffers checkedout = %i \n", device_buffers.size() );
       //create pending job entry
       //WARNING MAKE SURE this void * is valid during the invocation of the kernel
       //void * is a CUDA back to erase the type of the device pointer.
@@ -307,35 +317,67 @@ status flash_cuda::execute( ulong trans_id, ulong sa_id )
       std::ranges::transform(device_buffers, std::back_inserter( void_devs_buffs ),
       		             [](auto& device_buffer) { return (void *) &device_buffer; } );
 
-      ret = cuLaunchKernel(func_binary.value(), dims[0], dims[1], dims[2], dims[3], 
-                           dims[4], dims[5], dims[6], nullptr, void_devs_buffs.data(), 0);
+      std::vector<CUdeviceptr> indTableIt;
+      //key is the offset address of the parititon
+      std::map<CUdeviceptr, std::vector<size_t> > dimps;
 
-      if( ret == CUDA_SUCCESS)
+      if( need_table )
       {
-        std::cout << "Kernel successfully launched..." << std::endl;
+        auto& table_md = _mem_registry.at( table_id.value() );
+	auto cit = cuda_index_table( device_buffers.back(), table_md );
+        indTableIt = cit.range();
+	dimps = cit.get_dim_parts();
+  
+      } 
+      else 
+      {
+	std::vector<size_t> dim_partition;
+	//shortcut to bypass theh loop
+	//this makes  the last buffer an argument
+        indTableIt.emplace_back( device_buffers.back() );
 
-        _pending_jobs.emplace(std::piecewise_construct,
-	  	              std::forward_as_tuple(wid),
-		  	      std::forward_as_tuple(trans_id, sa_id, ctx_key, kernel_args, device_buffers, 
-                                                    num_of_inputs, deferred_launch) );
-
-        _job_count_per_ctx.at(ctx_key) += 1;
-
-        auto stat = status{0, wid };
-
-        return stat;
+	std::ranges::copy(dims, std::back_inserter(dim_partition) );
+        dimps.emplace(device_buffers.back(), dim_partition ); 	
       }
-      else std::cout << "Could not launch " << rt_vars.get_lookup() << " : " << ret << std::endl;
+
+      for(auto table_seg : indTableIt )
+      {
+       // updating base table pointer
+	void_devs_buffs.back() = (void *) &table_seg;
+	auto dimp = dimps.at(table_seg);
+
+        ret = cuLaunchKernel(func_binary.value(), dimp[0], dimp[1], dimp[2], dimp[3], 
+                             dimp[4], dimp[5], dimp[6], nullptr, void_devs_buffs.data(), 0);
+  
+        if( ret == CUDA_SUCCESS)
+        {
+          std::cout << "Kernel successfully launched..." << std::endl;
+          //NEED TO ChaNGE to MULTIMAP
+          _pending_jobs.emplace(std::piecewise_construct,
+  	  	              std::forward_as_tuple(wid),
+  		  	      std::forward_as_tuple(trans_id, sa_id, ctx_key, kernel_args, device_buffers, 
+                                                      num_of_inputs, deferred_launch) );
+  
+          _job_count_per_ctx.at(ctx_key) += 1;
+  
+          auto stat = status{0, wid };
+  
+          return stat;
+        }
+        else std::cout << "Could not launch " << rt_vars.get_lookup() << " : " << ret << std::endl;
+      }
 
     }
     else //lazy
     {
-      deferred_launch = [&, tid=trans_id, sid=sa_id]()->int
+      deferred_launch = [&, tid=trans_id, sid=sa_id, 
+		            edims=dims, kattrs=sa_kattrs,
+                            tab_id=table_id, exdims=dims]()->int
       {
         bool defer=false;
         pre_pred();   
-        _assess_mem_buffers( tid, sid, kernel_args );
-        std::vector<CUdeviceptr> device_buffers = _checkout_device_buffers( tid, kernel_args, defer );
+        _assess_mem_buffers( tid, sid, kernel_args, exdims, kattrs );
+        std::vector<CUdeviceptr> device_buffers = _checkout_device_buffers( tid, kernel_args, tab_id, defer );
 
         if(defer) std::logic_error("Buffers are not available");
 
@@ -346,25 +388,59 @@ status flash_cuda::execute( ulong trans_id, ulong sa_id )
         std::ranges::transform(device_buffers, std::back_inserter( void_devs_buffs ),
       	  	               [](auto& device_buffer) { return (void *) &device_buffer; } );
         _kernel_comps.set_active_context( ctx_key );
-        int res = cuLaunchKernel(func_binary.value(), dims[0], dims[1], dims[2], dims[3], 
-                                 dims[4], dims[5], dims[6], nullptr, void_devs_buffs.data(), 0);
-        if( ret == CUDA_SUCCESS)
+      
+        std::vector<CUdeviceptr> indTableIt;
+        //key is the offset address of the parititon
+        std::map<CUdeviceptr, std::vector<size_t> > dimps;
+
+        if( need_table )
         {
-          std::cout << "Kernel successfully launched..." << std::endl;
+          auto& table_md = _mem_registry.at( tab_id.value() );
+	  auto cit = cuda_index_table( device_buffers.back(), table_md );
+          indTableIt = cit.range();
+	  dimps = cit.get_dim_parts();
   
-          _pending_jobs.emplace(std::piecewise_construct,
-  	  	              std::forward_as_tuple(wid),
-  		  	      std::forward_as_tuple(tid, sid, ctx_key, kernel_args, device_buffers, 
-                                                      num_of_inputs, deferred_launch) );
-  
-          _job_count_per_ctx.at(ctx_key) += 1;
-  
-          auto stat = status{0, wid };
-  
-          return stat;
+        } 
+        else 
+        {
+	  std::vector<size_t> dim_partition;
+	  //shortcut to bypass theh loop
+	  //this makes  the last buffer an argument
+          indTableIt.emplace_back( device_buffers.back() );
+
+	  std::ranges::copy(exdims, std::back_inserter(dim_partition) );
+          dimps.emplace(device_buffers.back(), dim_partition );
         }
-        else std::cout << "Could not launch " << rt_vars.get_lookup() << " : " << ret << std::endl;
-          return res;
+
+
+        for(auto table_seg : indTableIt )
+        {
+            //updating base table pointer
+  	  void_devs_buffs.back() = (void *) &table_seg;
+          auto dimp = dimps.at(table_seg);
+
+          int res = cuLaunchKernel(func_binary.value(), dimp[0], dimp[1], dimp[2], dimp[3], 
+                                   dimp[4], dimp[5], dimp[6], nullptr, void_devs_buffs.data(), 0);
+          if( ret == CUDA_SUCCESS)
+          {
+            std::cout << "Kernel successfully launched..." << std::endl;
+    
+            _pending_jobs.emplace(std::piecewise_construct,
+    	  	              std::forward_as_tuple(wid),
+    		  	      std::forward_as_tuple(tid, sid, ctx_key, kernel_args, device_buffers, 
+                                                        num_of_inputs, deferred_launch) );
+    
+            _job_count_per_ctx.at(ctx_key) += 1;
+    
+            auto stat = status{0, wid };
+    
+            return stat;
+          }
+          else std::cout << "Could not launch " << rt_vars.get_lookup() << " : " << ret << std::endl;
+            return res;
+	}
+
+        return CUDA_SUCCESS;
       };
 
     } //end of first_sa else
@@ -375,12 +451,16 @@ status flash_cuda::execute( ulong trans_id, ulong sa_id )
     std::cout << "Could not find function to execute" << std::endl;
   }
 
+  std::cout << "  Last Mark" << std::endl;
   return status{-1};
 }
 
-std::vector<CUdeviceptr> 
-flash_cuda::_checkout_device_buffers( ulong tid, std::vector<te_variable>& kargs, bool & defer )
+std::vector<CUdeviceptr>
+flash_cuda::_checkout_device_buffers( ulong tid, std::vector<te_variable>& kargs, o_string table_id, bool & defer )
 {
+
+  printf("      checkout_device_buffers(tid = %llu)\n", tid );
+
   std::vector<CUdeviceptr> out;
 
   std::string tid_str = std::to_string(tid);
@@ -388,17 +468,34 @@ flash_cuda::_checkout_device_buffers( ulong tid, std::vector<te_variable>& kargs
   std::ranges::for_each(kargs, [&](auto arg)
   {
     std::string key = arg.get_mem_id();
+    printf("        checkout_device_buffers:: arg = %s\n", key.c_str() );
 
     //////////////////////////////////////////////////////
     auto& md = _mem_registry.at(key);
+    printf("          Mark 1\n");
     //////////////////////////////////////////////////////
     auto& ms = md.get_mstate( tid_str );
+    printf("          Mark 2\n");
     defer |= ms.in_use && (arg.parm_attr.dir != DIRECTION::IN);
+    printf("          Mark 3\n");
     ms.in_use = true;
 
+    
     out.push_back( ms.dptr.value() );
+    printf("          Mark 4\n");
     //////////////////////////////////////////////////////
   } );
+
+  //adding inde table
+  if( table_id )
+  {
+    printf("          Adding table %s", table_id.value().c_str() );
+    auto& md = _mem_registry.at( table_id.value() );
+    auto& ms = md.get_mstate( tid_str );
+    ms.in_use = true;
+    out.push_back( ms.dptr.value() );
+
+  }
 
   return out;
 
@@ -488,15 +585,15 @@ int flash_cuda::_find_cubin_offset(void * nvFCubinBase, size_t fbin_len, std::st
 }	
 
 
-void flash_cuda::_process_external_binary( const kernel_desc& kd)
+void flash_cuda::_process_external_binary( const kernel_desc& kd, bool & found)
 {
   //adding the module	
   _add_cuda_modules( kd._kernel_definition.value() );
   // add function to the library
-  _add_cuda_function( kd._kernel_name.value() );
+  _add_cuda_function( kd._kernel_name.value(), found );
 }
 
-void flash_cuda::_add_cuda_function( std::string function_name )
+void flash_cuda::_add_cuda_function( std::string function_name, bool& found )
 {
   std::cout << "entering " << __func__ << std::endl;
 
@@ -542,7 +639,8 @@ void flash_cuda::_add_cuda_function( std::string function_name )
 	    _kernel_lib.push_back( 
 			     cuda_kernel{ func_id, function_name, mod.get_id(), ctx.get_id(), offset }
 			    );
-            
+
+            found = true;
 	  } //added function to functions
 	} //add module to modules
       } //finding the cubin     
@@ -663,18 +761,31 @@ void flash_cuda::_set_least_active_gpu_ctx()
   else std::cout << "Could not find gpu_ctx entry" << std::endl;
 }
 
-void flash_cuda::_assess_mem_buffers( ulong trans_id, ulong sa_id, std::vector<te_variable>& vars )
+void flash_cuda::_assess_mem_buffers( ulong trans_id, ulong sa_id, std::vector<te_variable>& vars,
+	                              std::vector<size_t> dims, te_attrs kAttrs )
 {
+  printf("entering _assess_mem_buffers tid = %llu, sid = %llu \n", trans_id, sa_id);
+ 
   cuda_context& cc = _kernel_comps.get_current_ctx();
-  
+   
   bool success = false;
+  //////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////
   for( auto& var : vars )
   {
     std::string buff_id = var.get_mem_id();
     
-    if( !_mem_registry.count(buff_id) ) 
+    if( !_mem_registry.count(buff_id) )
+    {
       allocate_buffer( var, success );
-    else success = true;
+      printf("Allocating new Buffer %s : ... : %i\n", buff_id.c_str(), success );
+    }
+    else 
+    {
+      printf("Buffer %s is already registered\n", buff_id.c_str() );
+      success = true;
+    }
 
     if( success )
     {
@@ -683,6 +794,37 @@ void flash_cuda::_assess_mem_buffers( ulong trans_id, ulong sa_id, std::vector<t
       md.reconcile_memstate( trans_id, sa_id, cc, var.parm_attr.dir );
     }
   }
+
+  //////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////
+  if( index_table::table_required( kAttrs )  )
+  {
+    std::string table_id = index_table::preview_table_id(dims);
+    if( !_mem_registry.count( table_id) )
+    {
+      _mem_registry.emplace(std::piecewise_construct,
+                            std::forward_as_tuple(table_id), 
+		            std::forward_as_tuple(dims, kAttrs) );
+
+      printf("Allocating new Buffer %s : ... : %i\n", table_id.c_str(), success );
+      
+    }
+    else
+    {
+      printf("Buffer %s is already registered\n", table_id.c_str() );
+      success = true;
+      
+    }
+
+    mem_detail& md = _mem_registry.at( table_id );
+
+    md.reconcile_memstate( trans_id, sa_id, cc, DIRECTION::IN );
+
+  }
+  //////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////
 
 }
 
@@ -704,11 +846,12 @@ void flash_cuda::_deallocate_buffer(ulong, te_variable& arg)
 
 void mem_detail::allocate( std::string tid, cuda_context ctx, DIRECTION dir, bool init )
 {
-
+  printf("    mem_detail::allocate tid = %s \n", tid.c_str() );
+ 
   if( !tid_exists(tid) )
   { 
     CUdeviceptr dptr;
-    auto mstate = add_memstate( tid, ctx, dir );
+    auto& mstate = add_memstate( tid, ctx, dir );
 
     cuMemAlloc ( &dptr, sz );
     mstate.dptr = dptr;
@@ -785,22 +928,27 @@ void mem_detail::device_to_device( CUcontext src_ctx, CUdeviceptr src_ptr, CUcon
 
 void mem_detail::reconcile_memstate( ulong tid, ulong sa_id, cuda_context ctx, DIRECTION dir )
 {
+
+  printf("  Entering reconcile_memstate tid = %llu, sa_id = %llu \n", tid, sa_id);
   std::string ctx_key = ctx.get_id();
   auto tid_str = std::to_string( tid );
-
+  printf("    Mark 1\n");
   
   //memory state on same device (sd)
   auto ms_sd = std::ranges::find( _mstates, ctx_key, 
                                   &decltype(_mstates)::value_type::get_cid);
   
+  printf("    Mark 2\n");
   //memory state on different device (dd) 
   auto ms_dd = std::ranges::find_if( _mstates, unary_diff{ctx_key}, 
                                      &decltype(_mstates)::value_type::get_cid);
  
+  printf("    Mark 3\n");
   auto key = std::make_pair( tid, sa_id );
 
   //Buffer on the same device
   if( ms_sd != _mstates.end() ){
+    printf("    Mark 4\n");
     ms_sd->dir = dir;
     ms_sd->tid = tid_str;
 
@@ -809,6 +957,7 @@ void mem_detail::reconcile_memstate( ulong tid, ulong sa_id, cuda_context ctx, D
     }
     else 
     {
+      printf("    Mark 5\n");
       auto states = std::make_pair(*ms_sd, *ms_sd );
 
       _pending_transfers.emplace(key, states );
@@ -817,6 +966,7 @@ void mem_detail::reconcile_memstate( ulong tid, ulong sa_id, cuda_context ctx, D
   }
   //Buffer different devices
   else if( ms_dd != _mstates.end() ){
+    printf("    Mark 6\n");
     allocate( tid_str, ctx, dir, false );
     auto ms = get_memstate( std::to_string(tid) );
 
@@ -827,6 +977,7 @@ void mem_detail::reconcile_memstate( ulong tid, ulong sa_id, cuda_context ctx, D
                        ms.dptr.value() );
     else
     {
+      printf("    Mark 7\n");
       auto states = std::make_pair(*ms_dd, ms );
 
       _pending_transfers.emplace(key, states );
@@ -836,48 +987,215 @@ void mem_detail::reconcile_memstate( ulong tid, ulong sa_id, cuda_context ctx, D
   //no buffers anywhere
   else{
     //buffer exists in this context/device
+    printf("    Mark 8\n");
     allocate( tid_str, ctx, dir );
   }
 
 }
 
 
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////index_table_intf//////////////////////////////////////////////////////////
+/////////////////-/////////////////////////////////////////////////////////////////////////////////////////////////////
+/*std::vector<size_t> index_table::generate_offsets( std::vector<size_t>, te_attr )
+{
+
+  return {};
+}
+*/
+std::string index_table::preview_table_id( const std::vector<size_t>& table_dims )
+{
+
+  auto underscore = [](std::string id, size_t sz) 
+  {
+    return std::move(id) + '_' + std::to_string(sz);
+  };
+	 
+  return std::accumulate(std::begin(table_dims), 
+                         std::end(table_dims),
+			 std::string("table_"),
+			 underscore); // start with first element
+  
+}
 
 
+index_table::index_table( std::vector<ulong> table_dims, 
+                          te_attrs kernel_attrs )
+{
+  _sz =  std::accumulate(table_dims.begin(), table_dims.end(), 0);
+  _hptr = (size_t *) malloc( _sz*sizeof(size_t) );
+  _id = preview_table_id(table_dims);
+
+  _fill_host_memory(table_dims);
+
+  _generic_offsets.push_back(0);
+
+  if( !kernel_attrs.empty() ) 
+    reorder ( kernel_attrs );
 
 
+}
+//This is a list ofindexes
+std::vector< std::vector<size_t> >
+index_table::get_dim_arrays()
+{
+  //this functionre retuns for each subdispatch returns the new dimsension
+  using ret_valtype = std::vector<size_t>;
+  std::vector<ret_valtype> out;
+
+  if( _generic_offsets.size() == 1)
+  {
+    out.push_back(_dims);
+    return out;
+  }
+  
+  size_t num_parts = 1;
+
+  for(uint i=_split_dim; i < _dims.size(); i++)
+    num_parts *= _dims.at(i);
+
+  for(uint i=0; i < num_parts; i++)
+  {
+    ret_valtype entry;
+    for(uint j=0; j < _dims.size(); j++)
+      entry.emplace_back(j<_split_dim?_dims.at(j):1 );
+	
+    out.push_back( std::move(entry) );
+  } 
+
+  return out;
+}
+
+void 
+index_table::_calc_generic_offsets( )
+{
+  size_t num_parts = 1, element_offset=1;
+
+  for(uint i=_split_dim; i < _dims.size(); i++)
+    num_parts *= _dims.at(i);
+ 
+  for(uint i=0; i < _split_dim; i++)
+    element_offset *= _dims.at(i);
+
+  element_offset *= _dims.size();
+
+  auto byte_offset = element_offset * sizeof(size_t);
+ 
+  for(size_t i=0; i < num_parts; i++)
+    _generic_offsets.push_back(byte_offset);
+
+}	
 
 
+/*operator index_table::te_variable() const
+{
+  auto tv = te_variable{
+              _hptr,
+              sizeof(size_t),
+              _sz,
+              ParmAttr{true, false, false, false, false, DIRECTION::IN},
+              {},{}, _id
+
+            };
+
+  return tv;
+
+}*/
 
 
+void index_table::_fill_host_memory( std::vector<ulong> dims)
+{
+  for(ulong ui=0; ui < _sz/dims.size(); ui++)
+  {
+    for(uint dim=0; dim < dims.size(); dim++)
+    {
+      _hptr[ui+dim] = ui % dims[dim];
+    }  
 
+  }
+}
 
+void index_table::reorder( te_attrs kattrs )
+{
+  if( kattrs.size() == 0 ) return;
 
+  if(kattrs.size() == 1 )
+  {
+    _split_dim = kattrs.front().dims.at(0);
 
+    if( kattrs.front().id == KATTR_SORTBY_ID )
+      _sort_host_memory( kattrs.front().dims );
+    else if( kattrs.front().id == KATTR_GROUPBY_ID )
+      _group_host_memory( kattrs.front().dims );
+  } else std::cout << "multiple attributes unsupported" << std::endl;
 
+  _calc_generic_offsets();
+}
 
+void index_table::_sort_host_memory( std::vector<size_t> dims )
+{
 
+}
 
+void index_table::_group_host_memory( std::vector<size_t> dims )
+{
 
+}
 
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////index_table_intf//////////////////////////////////////////////////////////
+/////////////////-/////////////////////////////////////////////////////////////////////////////////////////////////////
+cuda_index_table::cuda_index_table(const CUdeviceptr& devptr, 
+		                   const mem_detail& md )
+: _dptr( devptr ), _md(md)
+{
+  _convert( );
+}
 
+void
+cuda_index_table::_convert( )
+{
+  auto o_table = _md.get_table();
+  
+  if( !o_table )
+    std::cout <<"mem detail is not a table ..." << std::endl;
+  else
+  {
+    auto offsets = o_table->get_generic_offset();
+    std::ranges::for_each(offsets, [&](auto offset)
+    {
+      _segments.push_back(_dptr + offset);
+    });
+  }
+}
 
+std::vector<CUdeviceptr>
+cuda_index_table::range()
+{
+  return _segments;
+}
 
+std::map<CUdeviceptr, std::vector<size_t> > 
+cuda_index_table::get_dim_parts()
+{
+  auto o_table = _md.get_table();
+  std::map<CUdeviceptr, 
+	     std::vector<size_t> > out;
+  
+  if( !o_table )
+    std::cout <<"mem detail is not a table ..." << std::endl;
+  else
+  {
+    auto new_dims = o_table->get_dim_arrays();
+    auto dev_ptrs = range();
+    std::ranges::transform (dev_ptrs, new_dims, std::begin(new_dims),
+    [&](auto dev_ptr, auto dims)
+    {
+      out.insert({dev_ptr, dims}); 
+      return dims;
+    } );
 
+  }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+  return out;
+}

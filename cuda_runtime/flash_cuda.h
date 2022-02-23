@@ -311,6 +311,71 @@ struct pending_job_t
 
 };
 
+struct index_table
+{
+
+  static bool table_required( te_attrs kattrs ){
+    return !kattrs.empty();
+  }
+
+  static std::string preview_table_id( const std::vector<size_t>& );
+
+  index_table(std::vector<ulong> = {},
+              te_attrs = {} );
+
+  std::vector<std::vector<size_t> >
+	  get_dim_arrays();
+  
+  operator te_variable () const
+  {
+    auto tv = te_variable{
+                _hptr,
+                sizeof(size_t),
+                _sz,
+                ParmAttr{true, false, false, false, DIRECTION::IN},
+                {}, _id };
+
+    return tv;
+
+  }
+ 
+
+  std::string get_id() const {
+    return _id;
+  }
+
+  void _fill_host_memory(std::vector<ulong> dims);
+
+  void _sort_host_memory( std::vector<size_t> );
+  
+  void _group_host_memory( std::vector<size_t> );
+
+  void reorder( te_attrs );
+
+  void _calc_generic_offsets();
+
+  std::vector<size_t>
+    get_generic_offset() 
+  {
+    return _generic_offsets;
+  }
+
+  size_t get_size(){
+    return _sz;
+  }
+
+  size_t * get_host_ptr(){
+    return _hptr;
+  }
+
+  std::string _id;
+  size_t _sz;
+  size_t * _hptr;
+
+  size_t _split_dim;
+  std::vector<size_t> _dims;
+  std::vector<size_t> _generic_offsets;
+};
 
 //think about creating meta data for the memory
 struct mem_detail
@@ -331,26 +396,19 @@ struct mem_detail
   };
 
   mem_detail( void * data, size_t size, bool flash_mem = false) 
-  : host_data(data), sz(size), _is_flash(flash_mem) {}
+  : host_data(data), sz(size), _is_flash(flash_mem){}
 
-  auto add_memstate( std::string tid, cuda_context ctx, DIRECTION dir )
+  mem_detail(std::vector<size_t> dims, te_attrs attrs)
+  : _o_indTable(std::in_place, dims, attrs )
   {
-    auto ms = mem_state{ tid, dir, ctx, {} };
-    return _mstates.emplace_back( ms );
+    sz = _o_indTable->get_size();
+    host_data = _o_indTable->get_host_ptr();
+
   }
 
-  mem_state& get_memstate( std::string tid )
-  {
-    //return *std::ranges::find( _mstates, unary_equals{ tid }, &mem_detail::mem_state::tid );
-    return *std::ranges::find( _mstates, tid, &mem_detail::mem_state::tid );
-  }
+  //static CUdeviceptr index_table_create(mem_state::ctx_type, 
 
   void reconcile_memstate( ulong, ulong, cuda_context, DIRECTION);
-
-  bool memstate_exists( std::string tid )
-  {
-    return std::ranges::any_of( _mstates, unary_equals{tid}, &mem_detail::mem_state::tid );
-  }
 
   size_t size() { return sz; }
   bool is_flash() { return _is_flash; } 
@@ -361,6 +419,30 @@ struct mem_detail
   void device_to_host( CUdeviceptr );
   void device_to_device(CUcontext, CUdeviceptr, CUcontext, CUdeviceptr );
 
+  template<typename T>
+  T * get_host_ptr() 
+  {
+    return (T) host_data;
+  }
+
+  bool memstate_exists( std::string tid )
+  {
+    return std::ranges::any_of( _mstates, unary_equals{tid}, &mem_detail::mem_state::tid );
+  }
+
+  decltype(auto) add_memstate( std::string tid, cuda_context ctx, DIRECTION dir )
+  {
+    printf("    mem_datail::add_memstate(tid = %s) \n", tid.c_str() );
+ 
+    auto ms = mem_state{ tid, dir, ctx, {} };
+    return _mstates.emplace_back( ms );
+  }
+
+  mem_state& get_memstate( std::string tid )
+  {
+    //return *std::ranges::find( _mstates, unary_equals{ tid }, &mem_detail::mem_state::tid );
+    return *std::ranges::find( _mstates, tid, &mem_detail::mem_state::tid );
+  }
 
   bool in_use( std::string tid )
   {
@@ -405,9 +487,36 @@ struct mem_detail
            std::pair<mem_state, mem_state> >
     _pending_transfers;
 
+  std::optional<index_table>
+  get_table() const
+  {
+    return _o_indTable;
+  }
+
   size_t sz;
   void * host_data;
   bool _is_flash;
+  std::optional<index_table> _o_indTable;
+};
+
+
+struct cuda_index_table
+{
+  cuda_index_table(const CUdeviceptr&, 
+	           const mem_detail& );
+
+  std::vector<CUdeviceptr> range();
+
+  std::map<CUdeviceptr, 
+	   std::vector<size_t> > 
+  get_dim_parts();
+
+  void _convert( );
+
+  const CUdeviceptr& _dptr;
+  const mem_detail& _md;
+  std::vector<CUdeviceptr> _segments;
+
 };
 
 class flash_cuda : public IFlashableRuntime
@@ -440,10 +549,18 @@ class flash_cuda : public IFlashableRuntime
 
     static std::string get_factory_desc() { return "This runtime supports NVIDIA CUDA"; }
 
+    ~flash_cuda()
+    {
+      printf("**************************************************************");
+      printf("**********************Destroying flash_cuda.******************");
+      printf("**************************************************************");
+    }
+
 
   private:
 
     flash_cuda();
+
 
     void _retain_cuda_contexts();
 
@@ -453,15 +570,17 @@ class flash_cuda : public IFlashableRuntime
 
     void _add_cuda_modules(std::string);
 
-    void _add_cuda_function( std::string );
+    void _add_cuda_function( std::string, bool & );
 
-    void _process_external_binary( const kernel_desc & );
+    void _process_external_binary( const kernel_desc &, bool & );
 
     int _find_cubin_offset( void *, size_t, std::string, size_t *, std::string * );
 
-    void _assess_mem_buffers( ulong, ulong, std::vector<te_variable>& );
+    void _assess_mem_buffers( ulong, ulong, std::vector<te_variable>&,
+		              std::vector<size_t>, te_attrs );
 
-    std::vector<CUdeviceptr> _checkout_device_buffers( ulong, std::vector<te_variable>&, bool& );
+    std::vector<CUdeviceptr> _checkout_device_buffers( ulong, std::vector<te_variable>&, 
+		                                       o_string, bool& );
     void _release_device_buffers( ulong, std::vector<te_variable>& );
 
     bool _try_exec_next_pjob( ulong );

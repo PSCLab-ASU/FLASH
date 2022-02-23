@@ -3,6 +3,7 @@
 #include <ranges>
 #include <algorithm>
 #include <functional>
+#include <future>
 
 //std::shared_ptr<flash_rt> flash_rt::_global_ptr;
 
@@ -293,7 +294,7 @@ status EXPORT flash_rt::process_transaction( ulong tid )
 {
   std::cout << "calling flash_rt::" << __func__ <<"("<<tid <<")" << std::endl;
   ///////////////////////////////////////////////////////////
-  std::vector<status> statuses;
+  std::vector<std::future<status> > statuses;
   strings rtks;
  
   auto [b_iter, e_iter] = _trans_intf.get_transaction(tid);
@@ -325,6 +326,7 @@ status EXPORT flash_rt::process_transaction( ulong tid )
     //submit subactions
     std::for_each( pipeline.begin(), pipeline.end(), [&](subaction& stage)
     {
+      std::cout << "------------------------------------------------" << std::endl;
       auto[num_of_inputs, rt_vars, kernel_args, exec_parms,
            pre_pred, post_pred ] = stage.input_vars();
 
@@ -339,25 +341,48 @@ status EXPORT flash_rt::process_transaction( ulong tid )
       auto runtime  = _rtrs_tracker.get_create_runtime( stage.get_rtk() ); 
       rtks.push_back( stage.get_rtk() );                    
       
-      std::cout << "------------------------------------------------" << std::endl;
-      std::cout << "executing " << kname_ovr.value_or("NoKernel") << ", status = ";
+      std::cout << "executing " << kname_ovr.value_or(base_kname) << ", status = ";
       //statuses.push_back( runtime->execute(rt_vars, num_of_inputs, kernel_args, exec_parms, opts ) );
-      statuses.push_back( _runtime_ptr->execute(tid, sa_id ) );
-      std::cout << "In progress..." << std::endl;
+      auto exec_future = std::async(std::launch::async, 
+                         [=]{
+                           printf("\nFLASH Executing thread_id= %i tid = %llu, sa_id = %llu",
+                                  std::hash<std::thread::id>{}(std::this_thread::get_id()),
+                                  tid, sa_id );  
+                           return runtime->execute(tid, sa_id ); 
+                         });
+      statuses.push_back( std::move(exec_future)  );
+      std::cout << "In progress on "<< stage.get_rtk() << " ..." << std::endl;
       std::cout << "------------------------------------------------" << std::endl;
 
     });
-
+    /*std::cout << "******************************************************************************" << std::endl;
+    std::cout << "****************************Wait for all Executes to finished*****************" << std::endl;
     std::cout << "******************************************************************************" << std::endl;
-    std::cout << "******************************************************************************" << std::endl;
-    std::cout << "******************************************************************************" << std::endl;
+    auto exec_wait = std::bind(&std::future<status>::wait, std::placeholders::_1);
+    std::ranges::for_each( statuses, exec_wait );  */ 
 
     std::cout << "******************************************************************************" << std::endl;
     std::cout << "********************************Wait Section**********************************" << std::endl;
     std::cout << "******************************************************************************" << std::endl;
     ///wait for work to complete
-    auto completed = statuses | std::views::filter( unary_equals{true} ) |  std::views::transform([&](auto stat)
+    auto completed = statuses | std::views::transform([&](auto& stat_future)
     {
+      status stat;
+
+      if( !stat_future.valid() ) 
+      {
+        printf("Future is not valid...\n");
+
+        return stat; 
+      }
+     
+      stat = stat_future.get();
+ 
+      if ( !stat ) {
+        printf("failed to execute....\n");
+        return status{};
+      }
+
       if( stat.work_id )
       {
         auto wid = stat.work_id.value();
@@ -383,12 +408,16 @@ status EXPORT flash_rt::process_transaction( ulong tid )
 
     if( all_complete ) std::cout << "successfully completed tid = " << tid << std::endl;
     else std::cout << "failed to complete tid = " << tid << std::endl; 
-
+    
   }
   else
   {
     std::cout << "Could not locate transaction " << tid << std::endl;
   }
+
+  std::cout << "******************************************************************************" << std::endl;
+  std::cout << "********************************Wait Section Complete*************************" << std::endl;
+  std::cout << "******************************************************************************" << std::endl;
 
   return {};
 }

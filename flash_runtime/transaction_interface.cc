@@ -37,11 +37,13 @@ transaction_interface::transaction_interface()
 subaction&
 transaction_interface::add_sa2ta( ulong trans_id, subaction&& sa)
 {
+  printf("transaction_interface::add_sa2ta : tid = %llu, sa_id = %llu\n", trans_id, sa.get_saId() ); 
+
   ids key = std::make_pair( trans_id, sa.get_saId() );
   auto& [t_mux, t_cv] = _events[key];
   t_mux.unlock();
 
-  return _transactions.emplace( trans_id, sa )->second;
+  return _transactions.emplace( trans_id, std::forward<subaction>(sa) )->second;
 }
 
 
@@ -85,7 +87,7 @@ transaction_interface::get_pred( ulong sa_id )
   std::vector<ids> dep_event_ids;
 
   std::cout << __func__ << " Mark 0" << std::endl;
-  auto [start_sa_It, end_sa_It] = _transactions.equal_range( _tid.value() );
+  auto [start_sa_It, end_sa_It] = get_transaction( _tid.value() );
   std::cout << __func__ << " Mark 1" << std::endl;
 
   auto target_sa = find_sa_within_ta( sa_id );
@@ -147,15 +149,22 @@ transaction_interface::get_pred( ulong sa_id )
 
 subaction& transaction_interface::find_sa_within_ta(ulong sa_id, std::optional<ulong> trans_id )
 {
+ 
   ulong tid = trans_id.value_or( _tid.value() );
+  printf("entering transaction_interface::find_sa_within_ta ntrans=%llu, tid=%llu, sa_id=%llu\n",_transactions.size(), tid, sa_id);
 
-  auto [start_sa_It, end_sa_It] = _transactions.equal_range( tid );
+  auto [start_sa_It, end_sa_It] = get_transaction( tid );
+
+  ulong d = std::distance( start_sa_It, end_sa_It);
+  printf( "The number of subaction = %llu \n", d );
 
   auto sa = std::ranges::find_if(start_sa_It, end_sa_It, [&](auto& sa)
             {
               return sa.second.get_saId() == sa_id;
             });
 
+  if( sa == end_sa_It) printf("Could not find subactions\n");
+ 
   return sa->second;
 
 }
