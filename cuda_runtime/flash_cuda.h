@@ -320,7 +320,7 @@ struct index_table
 
   static std::string preview_table_id( const std::vector<size_t>& );
 
-  index_table(std::vector<ulong> = {},
+  index_table(std::vector<size_t> = {},
               te_attrs = {} );
 
   std::vector<std::vector<size_t> >
@@ -539,7 +539,8 @@ class flash_cuda : public IFlashableRuntime
 
     status transfer_buffer( std::string, void *)  final;
 
-    status set_trans_intf( std::shared_ptr<transaction_interface> ) final;
+    //status set_trans_intf( std::shared_ptr<transaction_interface> ) final;
+    status set_trans_intf( transaction_interface& ) final;
 
     static FlashableRuntimeMeta<IFlashableRuntime> get_runtime();
 
@@ -549,13 +550,13 @@ class flash_cuda : public IFlashableRuntime
 
     static std::string get_factory_desc() { return "This runtime supports NVIDIA CUDA"; }
 
-    ~flash_cuda()
+    /*~flash_cuda()
     {
       printf("**************************************************************");
       printf("**********************Destroying flash_cuda.******************");
       printf("**************************************************************");
     }
-
+     */
 
   private:
 
@@ -599,7 +600,7 @@ class flash_cuda : public IFlashableRuntime
 
     std::map<std::string, mem_detail> _mem_registry;
 
-    std::shared_ptr<transaction_interface> _trans_intf;
+    transaction_interface *  _trans_intf;
 
     static  std::shared_ptr<flash_cuda> _global_ptr; 
 

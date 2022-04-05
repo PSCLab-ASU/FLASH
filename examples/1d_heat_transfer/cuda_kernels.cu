@@ -32,9 +32,9 @@ __global__ void compute_heat( unsigned long num_p, float * arg, float * arg_next
   if( adj_stage_idx == 0 )
   {
     if( x == num_p + 1)
-      arr_next[x] = arr[x - 1];
+      arg_next[x] = arg[x - 1];
     else
-      arr_next[x] = C * (arr[x + 1] - 2 * arr[x] + arr[x - 1]) + arr[x];
+      arg_next[x] = C * (arg[x + 1] - 2 * arg[x] + arg[x - 1]) + arg[x];
   }
   else
   {

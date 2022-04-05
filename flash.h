@@ -434,7 +434,7 @@ SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::exec(Us... items)
   std::cout << "Exec: forward_exec..." << std::endl;
 
   _upstream->get_runtime()->process_transaction( transaction_id );
-  std::cout << "Exec: process_transaction..." << std::endl;
+  std::cout << "Exec Complete!" << std::endl;
   //flash_rt::get_runtime()->process_transaction( transaction_id );
 
   return ExecObj(*this);
@@ -675,9 +675,10 @@ struct KernelDefinition
     kernel_t_decl<k_type> get_kernel_details(){ return _input_program; }
     auto                  get_method_ovr()    { return _kernel_name; }
 
-    KernelDefinition ( kernel_t_decl<k_type> kname_inp1={}, 
-                       std::optional<std::string> kname_inp2={} )
-    { 
+
+    void _kerneldefinition(kernel_t_decl<k_type> kname_inp1,
+	     	           std::optional<std::string> kname_inp2 )
+    {
       bool is_file1 = is_file( kname_inp1 );
       bool is_file2 = is_file( kname_inp2 );
 
@@ -698,7 +699,28 @@ struct KernelDefinition
       { 
         _kernel_name = kname_inp1;
       }
+
     }
+
+    KernelDefinition ( kernel_t_decl<k_type> kname_inp1={}, 
+                       std::optional<std::string> kname_inp2={} )
+    {
+      _kerneldefinition( kname_inp1, kname_inp2 ); 
+    }
+
+    //KernelDefinition<NumPureInputs, KD, k_type, Ts...>
+    auto
+    operator()( kernel_t_decl<k_type> kname_inp1={},
+		std::optional<std::string> kname_inp2={} )
+    {
+      auto farg = kname_inp1?kname_inp1:_kernel_name;
+      auto sarg = kname_inp2?kname_inp2:_input_program;
+
+      _kerneldefinition( farg, sarg );
+
+      return *this; 
+    } 
+    
 
 
     static constexpr size_t Get_NArgs()

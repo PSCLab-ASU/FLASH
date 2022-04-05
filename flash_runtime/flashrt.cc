@@ -45,7 +45,8 @@ EXPORT flash_rt::flash_rt( std::string lookup)
     _backend = FlashableRuntimeFactory::Create( lookup );
     //get pointer to backend runtime
     _runtime_ptr = _backend.value()();
-    _runtime_ptr->set_trans_intf( std::shared_ptr<transaction_interface>( &_trans_intf ) );
+    //_runtime_ptr->set_trans_intf( std::shared_ptr<transaction_interface>( &_trans_intf ) );
+    _runtime_ptr->set_trans_intf( _trans_intf  );
     std::cout << "Ctor'ing flash_rt...." << std::endl;
 
     std::cout << _backend->get_description() << std::endl; 
@@ -217,7 +218,9 @@ status EXPORT flash_rt::execute(runtime_vars rt_vars,  uint num_of_inputs,
   std::cout << __func__ << " Mark 8" << std::endl;
   auto pred = [dep_pred, deferred_transfer]()->int
   {
+    std::cout << "calling dep_pred...\n";
     dep_pred();
+    std::cout << "calling deferred_transfer...\n";
     deferred_transfer();
     return 0;
   };

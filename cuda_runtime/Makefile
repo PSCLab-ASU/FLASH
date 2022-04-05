@@ -19,7 +19,7 @@ CC.gcc  := g++
 LD.gcc  := g++
 AR.gcc  := ar
 
-CXXFLAGS.gcc.debug := -O0 -g -fstack-protector-all
+CXXFLAGS.gcc.debug := -O0 -gdwarf-02 -fstack-protector-all
 CXXFLAGS.gcc.release := -O3 -march=native -DNDEBUG
 CXXFLAGS.gcc := -std=c++2a -fPIC ${CXXFLAGS.gcc.${BUILD}}
 

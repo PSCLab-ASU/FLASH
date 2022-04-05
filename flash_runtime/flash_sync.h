@@ -46,7 +46,7 @@ struct group_by : public Attr
 
     set_generic_vals( {Dims...} );
 
-    if ( sizeof...(DDims) != N)
+    if ( (sizeof...(DDims) != N) && !dims.empty() )
     {
       set_generic_vals( dims );
     }

@@ -24,7 +24,7 @@ CC.gcc  := g++
 LD.gcc  := g++
 AR.gcc  := ar
 
-CXXFLAGS.gcc.debug := -O0 -g -fstack-protector-all
+CXXFLAGS.gcc.debug := -O0 -gdwarf-02 -fstack-protector-all
 CXXFLAGS.gcc.release := -O3 -march=native -DNDEBUG
 CXXFLAGS.gcc := -std=c++2a -shared -fPIC -fvisibility=hidden ${CXXFLAGS.gcc.${BUILD}}
 
@@ -35,7 +35,7 @@ CC       := ${CC.${COMPILER}}
 LD       := ${LD.${COMPILER}}
 AR       := ${AR.${COMPILER}}
 
-LDFLAGS.common  := -std=c++2a -lstdc++ -lpthread -ldl
+LDFLAGS.common  := -std=c++2a -lstdc++ -lpthread -ldl -lstdc++fs
 LDFLAGS.debug   := $(LDFLAGS.common)
 LDFLAGS.release := $(LDFLAGS.common)
 LDFLAGS         := ${LDFLAGS.${BUILD}}

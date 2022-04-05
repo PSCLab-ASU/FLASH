@@ -15,10 +15,11 @@ int main(int argc, const char * argv[])
 {
    
     size_t n_points = 1000, n_stages=2, n_iter=100;
-    flash_memory<float> arr(n_points+2);
-    flash_memory<float> arr_next(n_points+2);
+    std::vector<float> arr(n_points+2, 0), arr_next(n_points+2, 0);
 
-    RuntimeObj ocrt(flash_rt::get_runtime("ALL") , HEAT_TRANSFER_K{ argv[1] } );
+    auto htk = HEAT_TRANSFER_K{ argv[0] };
+
+    RuntimeObj ocrt( std::move(htk) );
 
     //Create pipeline
     //first submit is a default kernel 'init', then the
@@ -27,16 +28,17 @@ int main(int argc, const char * argv[])
     //the compute_heat converts into two distinct kernel launches
     //with the implicit barrier we can absorb the swapping between 
     //arr and arr_next, then that process repeats n_iter times.
-    ocrt.submit(HEAT_TRANSFER_K{}, n_points, arr, arr_next ).defer(n_points + 2)
-        .submit(HEAT_TRANSFER_K{"compute_heat"}, n_points, arr, arr_next )
-        .exec(n_points + 1, n_stages, n_iter);
-
+    //ocrt.submit(HEAT_TRANSFER_K{}, n_points, arr, arr_next ).defer(n_points + 2)
+    //    .submit(HEAT_TRANSFER_K{"compute_heat"}, n_points, arr, arr_next )
+    //    .exec(n_points + 1, n_stages, n_iter);
+    ocrt.submit(htk, n_points, arr, arr_next ).exec(n_points + 2);
+    
     //Read new positionaa
     //data() method returns a std::vector and implicitly and transfer the
     //entre device buffer to host
-    auto& points = arr.data();
-    std::cout << "Points : " << points.size() << std::endl;
-    std::ranges::copy(points, std::ostream_iterator<int>(std::cout, " "));
+    //auto& points = arr.data();
+    //std::cout << "Points : " << points.size() << std::endl;
+    //std::ranges::copy(points, std::ostream_iterator<int>(std::cout, " "));
 
     return 0;
 }

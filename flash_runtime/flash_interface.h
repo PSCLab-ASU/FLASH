@@ -22,7 +22,8 @@ class IFlashableRuntime
 
     virtual status transfer_buffer( std::string, void *) =0;    //get data by buffer_id
 
-    virtual status set_trans_intf( std::shared_ptr<transaction_interface> ) =0;
+    //virtual status set_trans_intf( std::shared_ptr<transaction_interface> ) =0;
+    virtual status set_trans_intf( transaction_interface & ) =0;
 
     virtual status execute(ulong, ulong) =0;
     virtual status wait( ulong ) =0;

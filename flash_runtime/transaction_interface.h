@@ -90,7 +90,7 @@ struct subaction
 
   const runtime_vars& get_rtvars(){ return rt_vars; }
 
-  bool need_index_table() { return ( lopts.size() > 0); }
+  bool need_index_table() { return ( get_kattrs().size() > 0); }
 
   auto input_vars( ) 
   { 
@@ -119,6 +119,13 @@ struct transaction_vars
     std::multimap<ulong, subaction> _transactions;
     std::map<ulong, option> _gopts;
     std::map<ids, event_var> _events;
+
+    /*~transaction_vars()
+    {
+      _events.clear();
+      _gopts.clear();
+      _transactions.clear();
+    }*/
 };
 
 class flash_rt;
@@ -180,7 +187,13 @@ class transaction_interface : protected transaction_vars
 
     auto get_transaction( ulong tid )
     {
+      auto exists = _transactions.contains(tid); 
+      printf("_transactions.contain() : %i \n", exists );
+      if ( !exists )
+	throw std::runtime_error("Could not find transaction...");
+  
       return _transactions.equal_range(tid);
+
     }
 
 

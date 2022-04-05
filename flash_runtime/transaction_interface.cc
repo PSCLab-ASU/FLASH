@@ -76,7 +76,9 @@ transaction_interface::demarc_boundaries( std::optional<ulong> tid_ovr)
   auto start_sa_It = _transactions.lower_bound( tr_id );
 
   start_sa_It->second.set_first();  
-  std::next(start_sa_It, cnt - 1)->second.set_last();
+
+  if( cnt > 1 ) 
+    std::next(start_sa_It, cnt - 1)->second.set_last();
 }
 
 
@@ -134,8 +136,8 @@ transaction_interface::get_pred( ulong sa_id )
       //unlock target on the succession
       if( !pre ) 
       { 
-        auto& [t_mu, t_cv] = this->get_event( target_id.first, 
-                                              target_id.second );
+        auto& [t_mu, t_cv] = this->get_event( target_id.second, 
+                                              target_id.first );
         t_mu.unlock();
       }
 

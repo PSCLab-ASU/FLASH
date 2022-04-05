@@ -111,9 +111,10 @@ status flash_cuda::transfer_buffer( std::string buffer_id, void * host_buffer)
   return status{};
 }
 
-status flash_cuda::set_trans_intf( std::shared_ptr<transaction_interface> trans_intf )
+//status flash_cuda::set_trans_intf( std::shared_ptr<transaction_interface> trans_intf )
+status flash_cuda::set_trans_intf( transaction_interface& trans_intf )
 {
-  _trans_intf = trans_intf;
+  _trans_intf = &trans_intf;
   return status{};
 }
 
@@ -209,16 +210,20 @@ status flash_cuda::wait( ulong  wid)
     std::cout << "waiting complete" << std::endl;
     ///////////////release resources/////////////////
     post_pred();
+    std::cout << "Releasing device buffers" << std::endl;
     _release_device_buffers( tid, kernel_args );
     /////////////////////////////////////////////////
+    std::cout << "Released device buffers" << std::endl;
     
     //move data from device buffer to host buffer
     bool last_saction = _try_exec_next_pjob( wid );
+    std::cout << "completed _try_exec_next" << std::endl;
 
     //This means there are no more pending jobs
     //or a specific transaction
     if( last_saction )
     {
+      std::cout << "Processing last subaction..." << std::endl;
       //check if transaction defers deallocation
       // or if they are flash memory 
       bool defer_dealloc   = _trans_intf->operator()(tid).check_option(sa_id, trans_options::DEFER_DEALLOC  );
@@ -283,15 +288,15 @@ status flash_cuda::execute( ulong trans_id, ulong sa_id )
   auto ctx_key     = _kernel_comps.get_current_ctx_key();
   //auto input_kargs = std::vector<te_variable>( kernel_args.begin(), kernel_args.begin() + num_of_inputs);
     //launch kernel
-  std::vector<size_t> dims(8, 1);
-  dims[7] = dims[6] = 0;
-  std::ranges::copy(exec_parms, dims.begin() );
+  std::vector<size_t> dims;
+  std::ranges::copy(exec_parms, std::back_inserter(dims) );
 
   o_string table_id;
   if( need_table ) table_id = index_table::preview_table_id( dims );
 
   if( func_binary )
   {
+    printf("<--Found binary--> : %i\n", sa_payload.is_first() );
     int i =0;
     bool defer=false;
 
@@ -305,6 +310,7 @@ status flash_cuda::execute( ulong trans_id, ulong sa_id )
       printf("Found the first subaction\n");
 
       pre_pred();   
+      printf("completed pre_pred subaction\n");
       _assess_mem_buffers( trans_id, sa_id, kernel_args, dims, sa_kattrs );
       printf("Completed memstate construction....\n");
 
@@ -327,6 +333,9 @@ status flash_cuda::execute( ulong trans_id, ulong sa_id )
 	auto cit = cuda_index_table( device_buffers.back(), table_md );
         indTableIt = cit.range();
 	dimps = cit.get_dim_parts();
+	//creating space for 
+        //can be a table buffer or a last parm
+        //void_devs_buffs.push_back(nullptr);
   
       } 
       else 
@@ -345,8 +354,8 @@ status flash_cuda::execute( ulong trans_id, ulong sa_id )
        // updating base table pointer
 	void_devs_buffs.back() = (void *) &table_seg;
 	auto dimp = dimps.at(table_seg);
-
-        ret = cuLaunchKernel(func_binary.value(), dimp[0], dimp[1], dimp[2], dimp[3], 
+        std::fill_n( std::back_inserter(dimp), 7-dimp.size(), 1 );
+        ret = cuLaunchKernel(func_binary.value(), dimp[3], dimp[1], dimp[2], dimp[0], 
                              dimp[4], dimp[5], dimp[6], nullptr, void_devs_buffs.data(), 0);
   
         if( ret == CUDA_SUCCESS)
@@ -399,6 +408,9 @@ status flash_cuda::execute( ulong trans_id, ulong sa_id )
 	  auto cit = cuda_index_table( device_buffers.back(), table_md );
           indTableIt = cit.range();
 	  dimps = cit.get_dim_parts();
+	  //creating space for 
+          //can be a table buffer or a last parm
+          //void_devs_buffs.push_back(nullptr);
   
         } 
         else 
@@ -418,6 +430,7 @@ status flash_cuda::execute( ulong trans_id, ulong sa_id )
             //updating base table pointer
   	  void_devs_buffs.back() = (void *) &table_seg;
           auto dimp = dimps.at(table_seg);
+          std::fill_n( std::back_inserter(dimp), 7-dimp.size(), 0 );
 
           int res = cuLaunchKernel(func_binary.value(), dimp[0], dimp[1], dimp[2], dimp[3], 
                                    dimp[4], dimp[5], dimp[6], nullptr, void_devs_buffs.data(), 0);
@@ -532,7 +545,7 @@ int flash_cuda::_find_cubin_offset(void * nvFCubinBase, size_t fbin_len, std::st
   CUfunction khw;    
   size_t offset =0;
   auto cdata = std::string( (char *) nvFCubinBase, fbin_len);
-  std::vector<size_t> mod_ind = {0, cdata.size() };
+  std::vector<size_t> mod_ind;
 
   std::regex sof_regex ("\x50\xed\x55\xba\x01\x00\x10\x00");
   while(std::regex_search(cdata, sof_match, sof_regex)) 
@@ -541,17 +554,19 @@ int flash_cuda::_find_cubin_offset(void * nvFCubinBase, size_t fbin_len, std::st
     {
       auto abs_indx = sof_match.position(i) + offset;
       offset += sof_match.position(i) + 5;
-      mod_ind.insert(std::next(mod_ind.begin(), mod_ind.size() - 1 ), abs_indx );
+      mod_ind.push_back( abs_indx );
     }    
    
     cdata = sof_match.suffix(); 
   }
+  mod_ind.push_back( fbin_len );
 
   //find function
+  cdata = std::string( (char *) nvFCubinBase, fbin_len);
   std::string func_regex = "[^\\. ]+" + func_name + "[^\\.]+";
   std::regex fregex (func_regex);
 
-  for(size_t i = 1; i < mod_ind.size()-1; i++)
+  for(size_t i = 0; i < mod_ind.size()-1; i++)
   {
     std::string subst = cdata.substr(mod_ind[i], mod_ind[i+1] - mod_ind[i] );
 
@@ -798,16 +813,16 @@ void flash_cuda::_assess_mem_buffers( ulong trans_id, ulong sa_id, std::vector<t
   //////////////////////////////////////////////////////////////////////////////////
   //////////////////////////////////////////////////////////////////////////////////
   //////////////////////////////////////////////////////////////////////////////////
+  printf("Entering table creation...\n");
   if( index_table::table_required( kAttrs )  )
   {
     std::string table_id = index_table::preview_table_id(dims);
     if( !_mem_registry.count( table_id) )
     {
+      printf("Allocating new Buffer %s : ... : %i\n", table_id.c_str(), success );
       _mem_registry.emplace(std::piecewise_construct,
                             std::forward_as_tuple(table_id), 
 		            std::forward_as_tuple(dims, kAttrs) );
-
-      printf("Allocating new Buffer %s : ... : %i\n", table_id.c_str(), success );
       
     }
     else
@@ -817,11 +832,14 @@ void flash_cuda::_assess_mem_buffers( ulong trans_id, ulong sa_id, std::vector<t
       
     }
 
+    printf("fetching table : %s...\n", table_id.c_str() );
     mem_detail& md = _mem_registry.at( table_id );
-
+    printf("reconciling table : %s...\n", table_id.c_str() );
     md.reconcile_memstate( trans_id, sa_id, cc, DIRECTION::IN );
+    printf("completed table reconcil : %s...\n", table_id.c_str() );
 
   }
+  printf("completed table creation...\n");
   //////////////////////////////////////////////////////////////////////////////////
   //////////////////////////////////////////////////////////////////////////////////
   //////////////////////////////////////////////////////////////////////////////////
@@ -1013,16 +1031,18 @@ std::string index_table::preview_table_id( const std::vector<size_t>& table_dims
 	 
   return std::accumulate(std::begin(table_dims), 
                          std::end(table_dims),
-			 std::string("table_"),
+			 std::string("table"),
 			 underscore); // start with first element
   
 }
 
 
-index_table::index_table( std::vector<ulong> table_dims, 
+index_table::index_table( std::vector<size_t> table_dims, 
                           te_attrs kernel_attrs )
 {
-  _sz =  std::accumulate(table_dims.begin(), table_dims.end(), 0);
+  _sz =  std::accumulate(table_dims.begin(), 
+		         table_dims.end(), 1, std::multiplies<size_t>() );
+  _dims = table_dims;
   _hptr = (size_t *) malloc( _sz*sizeof(size_t) );
   _id = preview_table_id(table_dims);
 
@@ -1071,6 +1091,13 @@ index_table::_calc_generic_offsets( )
 {
   size_t num_parts = 1, element_offset=1;
 
+  if( _split_dim > _dims.size() )
+  {
+    printf("_split_dim > _dim.size(), skipping offset calc\n");
+    _generic_offsets.push_back(0);
+    return; 
+  }
+
   for(uint i=_split_dim; i < _dims.size(); i++)
     num_parts *= _dims.at(i);
  
@@ -1083,7 +1110,7 @@ index_table::_calc_generic_offsets( )
  
   for(size_t i=0; i < num_parts; i++)
     _generic_offsets.push_back(byte_offset);
-
+  printf("finishing _calc_generic_offset...\n");
 }	
 
 
@@ -1121,7 +1148,14 @@ void index_table::reorder( te_attrs kattrs )
 
   if(kattrs.size() == 1 )
   {
+
+    printf("Getting split dim...: %i\n", kattrs.front().dims.size() );
+
     _split_dim = kattrs.front().dims.at(0);
+    printf("Got split dim... : %i\n", _split_dim);
+
+    printf("kattrs.front() = %s \n", 
+           kattrs.front().id == KATTR_SORTBY_ID?"SORTBY":"GROUPBY" );
 
     if( kattrs.front().id == KATTR_SORTBY_ID )
       _sort_host_memory( kattrs.front().dims );
@@ -1134,12 +1168,12 @@ void index_table::reorder( te_attrs kattrs )
 
 void index_table::_sort_host_memory( std::vector<size_t> dims )
 {
-
+  printf("Sorting table ...\n");
 }
 
 void index_table::_group_host_memory( std::vector<size_t> dims )
 {
-
+  printf("Group table ...\n");
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
