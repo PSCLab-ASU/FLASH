@@ -7,27 +7,26 @@
 //Adapted for FLASH from https://github.com/oneapi-src/oneAPI-samples.git
 //DirectProgramming/DPC++/N-BodyMethods/Nbody                                  In      In      Inout   Inout  Inout
                                                                                //grid  //posX  //PosY  //RanX   //RanY
-using PARTICLE_K  = KernelDefinition<0, "particle_init",    kernel_t::EXT_BIN, size_t *, float*, float*, float*, float* >; 
-using PARTICLE_K2 = KernelDefinition<3, "process_particle", kernel_t::EXT_BIN, Groupby<2>, ulong, size_t, float, flash_memory<uint>, 
+using PARTICLE_K  = KernelDefinition<0, "particle_init", kernel_t::EXT_BIN >; 
+using PARTICLE_K2 = KernelDefinition<3, "process_particle", kernel_t::EXT_BIN, GroupBy<2>, ulong, size_t, float, uint64_t, 
                                                                             size_t*, float*, float*, float*, float* >; 
 
 struct Particles
 {
-
   //the can be normal std::vectors, but
   //for optimization purposes flash memory can be
   //used as opaque handles to device memory
   //and accessed in the host lazily
-  flash_memory<float>  posX;
-  flash_memory<float>  posY;
-  flash_memory<float>  randX;
-  flash_memory<float>  randY;
-  flash_memory<size_t> grid;
+  std::vector<float>  posX;
+  std::vector<float>  posY;
+  std::vector<float>  randX;
+  std::vector<float>  randY;
+  std::vector<size_t> grid;
 
   size_t n_particles;
   size_t n_iter;
  
-  Particles(size_t, size_t );
+  Particles(size_t, size_t, ulong, ulong );
   
 
 };
@@ -51,11 +50,14 @@ Particles::Particles(size_t n_parts, size_t iter, ulong grid_size, ulong planes)
   //As a shortcut/optimization I used the "options" method as a named ctor for creating a sliding window
   //to mutate the function declaration it creates a kernel_trait modifier.
   //This helps maximize the reuse of the using statement
+  //if you anchor a variable with a single input arg, the position is the number
+  //else it is the starting position if multiple args are anchored.
   RuntimeObj ocrt;
-  ocrt.submit(PARTICLE_K{}, posX, posY).options( ocrt.ignore<1,2>() ).defer( n_particles )
-      .submit(PARTICLE_K{"grid_init"}, grid ).options( ocrt.ignore<0,4> ).defer( final_grid_sz  )
-      .submit(PARTICLE_K{"random_init"), randX, randY).options( ocrt.ignore<3>() ).exec( randX.size() ); 
 
+  ocrt.options(global_options::DEFER_OUTPUT_DEALLOC)
+      .submit(PARTICLE_K{}, posX, posY).defer( n_particles )
+      .submit(PARTICLE_K{"grid_init"}, grid).defer( final_grid_sz  )
+      .submit(PARTICLE_K{"random_init"}, randX, randY).exec( randX.size() ); 
   //The above statement invokes three kernels, particle_init (implicitly), grid_init, and random_init, respecitvely.
   //with work_item configuration of n_particles, final_grid_sz, randX.size()
   //since all these kernels do not have any dependent parameter small graph optimization
@@ -70,10 +72,11 @@ int main(int argc, const char * argv[])
     size_t n_particles=256, n_iter=10000;
     float radius = 0.5f;
 
-    RuntimeObj ocrt(flash_rt::get_runtime("ALL") , PARTICLE_K{ argv[1] }, PARTICLE_K2{ argv[1] } );
+    RuntimeObj ocrt(PARTICLE_K{ argv[0] }, PARTICLE_K2{ argv[0] } );
+    ocrt.options(global_options::COMMIT_IMPLS);
 
     //Intitializing is also acclerated by accelerators
-    Particles ps(n_particles, n_iter, grid_sz, planes);
+    Particles ps(n_particles, n_iter, grid_size, planes);
 
     //calling process_particles method
     //where the x dimension is the number of particles
@@ -81,12 +84,12 @@ int main(int argc, const char * argv[])
     //and those repeated 10000 times
     //flash memory is used to bypass the host write back from the initalization stage
     //the fifth argument is a shortcut to create a temporary device buffer for the duration of the subaction
-    ocrt.submit(PARTICLE_K2{"process_particles"}, grid_size, n_particles, radius, 
-                                                  n_particles*3, ps.grid, ps.posX. 
-                                                  ps.posY, ps.randX, ps.randY ).exec(n_particles, n_iter);
+    ocrt.submit(PARTICLE_K2{}, grid_size, n_particles, radius, 
+                               n_particles*3, ps.grid, ps.posX, 
+                               ps.posY, ps.randX, ps.randY ).exec(n_particles, n_iter);
 
     //transfers data from device to host completely
-    auto& Xs = ps.posX.data();
+    /*auto& Xs = ps.posX.data();
     auto& Ys = ps.posY.data();
 
     
@@ -94,7 +97,7 @@ int main(int argc, const char * argv[])
     for( size_t i=1; i < ps.posX.size()-1; i++)
       std::cout << "{ " << Xs[i] << ", " << Ys[i] << " }, ";     
     std::cout << "{ " << Xs[ps.size()-1] << ", " << Ys[ps.size()-1] << " }";     
-
+    */
     return 0;
 }
 

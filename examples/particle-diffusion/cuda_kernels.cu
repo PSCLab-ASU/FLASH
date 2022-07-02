@@ -4,20 +4,20 @@
 //Adapted from https://github.com/oneapi-src/oneAPI-samples.git
 //DirectProgramming/DPC++/StructuredGrids/particle-diffusion/src
 
-void __global__ particle_init(size_t *, float * posX, float * posY, float *, float *, size_t **)
+void __global__ particle_init(float * posX, float * posY)
 {
   int x = blockIdx.x*blockDim.x + threadIdx.x;
   posX[x] = posY[x] = 0;
 
 }
 
-void __global__ grid_init( size_t * grid, float *, float *, float *, float *, size_t **)
+void __global__ grid_init( size_t * grid)
 {
   int x = blockIdx.x*blockDim.x + threadIdx.x;
   grid[x] = 0;
 }
 
-void __global__ random_init( size_t *, float *, float *, float * randX, float * randY, size_t **)
+void __global__ random_init( float * randX, float * randY)
 {
   int x = blockIdx.x*blockDim.x + threadIdx.x;
   randX[x] = randY[x] = 0;
