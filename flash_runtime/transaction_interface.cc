@@ -111,7 +111,8 @@ transaction_interface::get_pred( ulong sa_id )
     bool dep = target_sa.intersect( sa );
     bool itself = target_sa.get_saId() == sa.get_saId();
 
-    if( dep && !itself ) 
+    if( dep && !itself && !sa.is_done() 
+        && (sa_id < sa.get_saId() ) ) 
       dep_event_ids.emplace_back( id_dep );
    
   } );
@@ -121,24 +122,44 @@ transaction_interface::get_pred( ulong sa_id )
   {
     return [this, dep_event_ids, pre, target_id]()->int
     {
-      for(auto[tid, sa_id] : dep_event_ids ) 
-      {
-        auto& [mu, cv] = this->get_event( tid, sa_id );
-        if( pre )
-        {
-          std::unique_lock<std::mutex> lk(mu);
-          cv.wait(lk);
-        } 
-        else cv.notify_all();
-        
-      }
+      auto& [t_mu, t_cv] = _events.at( target_id );
 
-      //unlock target on the succession
-      if( !pre ) 
-      { 
-        auto& [t_mu, t_cv] = this->get_event( target_id.second, 
-                                              target_id.first );
+      if( pre )
+      {
+        printf("-->Waiting for tid : %i, sa_id : %i<--\n", target_id.first, target_id.second );
+        std::unique_lock<std::mutex> lk(t_mu, std::try_to_lock );
+
+	if ( !dep_event_ids.empty() ) 
+	{
+	  printf("checking dep_event_ids ... : %i  \n", dep_event_ids.size());
+          t_cv.wait(lk, [&]()
+  	  {
+            //for each dep event
+  	  //wait on there notify
+            for(auto[tid, sa_id] : dep_event_ids ) 
+            {
+              auto& [mu, cv] = this->get_event( sa_id, tid );
+  	      printf("waiting for tid : %i, sa_id : %i\n", tid, sa_id);
+  	      std::unique_lock<std::mutex> c_lk(mu, std::defer_lock);
+              cv.wait(c_lk);
+            }
+  	    return true;
+  	  });
+	} 
+      }
+      else
+      {
+	printf("unlocking from\n");
         t_mu.unlock();
+
+	//notif each depend subaction
+        for(auto[tid, sa_id] : dep_event_ids ) 
+        {
+          auto& [mu, cv] = this->get_event( sa_id, tid );
+	  printf("Notifying from tid : %i, sa_id : %i\n", tid, sa_id);
+          cv.notify_all();
+        }
+
       }
 
       return 0;

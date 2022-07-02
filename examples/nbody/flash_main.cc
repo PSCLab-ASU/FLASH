@@ -55,7 +55,8 @@ int main(int argc, const char * argv[])
    
     size_t n_particles=16000, y_stages=2, time_steps=10;
 
-    RuntimeObj ocrt(flash_rt::get_runtime("NVIDIA_GPU") , PARTICLE_K{ argv[1] } );
+    //RuntimeObj ocrt(flash_rt::get_runtime("NVIDIA_GPU") , PARTICLE_K{ argv[1] } );
+    RuntimeObj ocrt("NVIDIA_GPU", PARTICLE_K{ argv[1] } );
 
     //Intitializing is also acclerated by accelerators
     Particles ps(n_particles);
@@ -69,7 +70,7 @@ int main(int argc, const char * argv[])
         .exec(n_particles, y_stages, time_steps);
 
     //Read new positionaa
-    auto& fpos = ps.pos;
+    /*auto& fpos = ps.pos;
     float (*pos)[3] = fpos.data();
     for( size_t i=0; i < fpos.size(); i++)
     {
@@ -78,7 +79,7 @@ int main(int argc, const char * argv[])
                 << "z = " << pos[i][2] << std::endl;
  
     }
-
+    */
     std::cout << "Total energy : " << ps.energy << std::endl;
 
 

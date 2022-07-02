@@ -29,9 +29,19 @@ const std::string g_NotImpl   = "NotImpl";
 const std::string g_NoAlloc   = "NoAlloc";
 const std::string g_NoRuntime = "ALL";
 
-enum struct global_options    {DEFER_DEALLOC=0, DEFER_WB, G_OPT_END };
-enum struct trans_options     {G_OPT_END, DEFER_DEALLOC, DEFER_WB, T_OPT_END };
-enum struct subaction_options {T_OPT_END, DEFER_DEALLOC, DEFER_WB, S_OPT_END };
+enum struct global_options    {DEFER_DEALLOC=0, 
+	                       DEFER_WB, 
+			       COMMIT_IMPLS, 
+			       DEFFER_OUTPUT_DEALLOC,  
+			       G_OPT_END };
+enum struct trans_options     {DEFER_DEALLOC=(ushort)global_options::G_OPT_END, 
+	                       DEFER_WB, 
+			       DEFFER_OUTPUT_DEALLOC,  
+			       T_OPT_END };
+enum struct subaction_options {DEFER_DEALLOC=(ushort)trans_options::T_OPT_END, 
+	                       DEFER_WB, 
+			       DEFFER_OUTPUT_DEALLOC,  
+			       S_OPT_END };
 
 enum {KATTR_SORTBY_ID=0, KATTR_GROUPBY_ID, KATTR_FMEM_ID };
 

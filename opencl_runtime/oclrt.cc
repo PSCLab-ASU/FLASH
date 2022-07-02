@@ -9,10 +9,10 @@
 
 
 /* Registers the factory with flash factory*/
-bool ocl_runtime::_registered = FlashableRuntimeFactory::Register(
+/*bool ocl_runtime::_registered = FlashableRuntimeFactory::Register(
                                 ocl_runtime::get_factory_name(),
                                 ocl_runtime::get_runtime() );
-
+*/
 std::shared_ptr<ocl_runtime> ocl_runtime::_global_ptr;
 
 

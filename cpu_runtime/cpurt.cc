@@ -15,10 +15,10 @@
 
 
 /* Registers the factory with flash factory*/
-bool cpu_runtime::_registered = FlashableRuntimeFactory::Register(
+/*bool cpu_runtime::_registered = FlashableRuntimeFactory::Register(
                                 cpu_runtime::get_factory_name(),
                                 cpu_runtime::get_runtime() );
-
+*/
 std::shared_ptr<cpu_runtime> cpu_runtime::_global_ptr;
 
 std::vector<subaction_context > cpu_runtime::g_subaction_table;

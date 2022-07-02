@@ -59,7 +59,8 @@ class ocl_runtime : public IFlashableRuntime
 
   public:
 
-    status register_kernels( const std::vector<kernel_desc> & ) final;
+    status register_kernels( const std::vector<kernel_desc> &,
+                             std::vector<bool>& successes ) final;
 
     status execute( runtime_vars, uint, std::vector<te_variable>, std::vector<size_t> ) final;  
 

@@ -84,7 +84,7 @@ struct SubmitObj
     template<typename T>
     void add_options( T local_ops)
     {
-      if constexpr( std::is_same_v<T, options> )
+      if constexpr( std::is_same_v<T, v_options> )
       {
         _opts.insert(std::end(_opts), local_ops.begin(), local_ops.end() );  
       }
@@ -95,7 +95,7 @@ struct SubmitObj
 
     } 
 
-    options get_ops() { return _opts; }
+    v_options get_ops() { return _opts; }
 
     template<typename ... Args>
     void _calc_sz_from_contrs(Args&& ...  );
@@ -107,7 +107,7 @@ struct SubmitObj
 
      //start forward execution path
     template<typename ExecParams, typename ... Us>
-    void _forward_exec(ulong, ulong&, options&,  ExecParams Params,  Us ... );
+    void _forward_exec(ulong, ulong&, v_options&,  ExecParams Params,  Us ... );
 
     template<typename T> friend class ExecObj;
 
@@ -119,7 +119,7 @@ struct SubmitObj
     Parms    _shadow_buffers;
     std::array<size_t, ParmSize > _sizes;
     std::array<ParmAttr, ParmSize > _bufferAttrs;
-    options _opts = {};
+    v_options _opts = {};
 };
 
 
@@ -135,9 +135,6 @@ class RuntimeObj
 
     //Thei ctor will allow host code to utilize any implementation avaiable for
     //a specific kernel
-    RuntimeObj()
-    : _runtimeImpl(flash_rt::get_runtime("ALL") ) {}
-    
 
     //constructor without upstream
     explicit  RuntimeObj(RuntimeImpl_t&& rt, Ts&& ... ts)
@@ -189,8 +186,10 @@ class RuntimeObj
     template<size_t I>
     auto get_kernel_definition()
     {
-      std::string name = std::get<I>(_registry).get_kernel_details().value();
-      return std::get<I>(_registry);
+      if constexpr(std::tuple_size_v<Registry_t> > 0)
+        return std::get<I>(_registry);
+      else 
+	return std::false_type();
     }
 
     template<typename T>
@@ -240,6 +239,12 @@ class RuntimeObj
       return std::move( RTObj ).device_select( devices);
     }
 
+    //TBD fill in for retaining all buffers
+    template< typename... Us>
+    RuntimeObj& options(Us... ts){
+      ushort opts[sizeof...(Us)] = { ((ushort)ts)... };
+      return *this;
+    }
 
     private: 
 
@@ -267,7 +272,7 @@ class RuntimeObj
         
         template< typename P, typename PA, typename I, typename Kernel, typename ExecParams>
         void execute(auto& trans_sub_id, Kernel& kernel, P& buffers, PA& buffer_attrs,
-                     auto& sizes, options& opts, ExecParams& successor_params, I&& exec_items )
+                     auto& sizes, v_options& opts, ExecParams& successor_params, I&& exec_items )
         {
             std::cout << "executing subaction" << std::endl;
             std::vector<size_t> exec_params;
@@ -326,7 +331,7 @@ class RuntimeObj
 
         //does nothing in runtime obj
         template<typename ExecParams, typename ... Us>
-        void _forward_exec( ulong tid, ulong& sa_id, options& opts, ExecParams, Us ... items) 
+        void _forward_exec( ulong tid, ulong& sa_id, v_options& opts, ExecParams, Us ... items) 
         {
             std::cout << "RuntimeObj : _forward_exec opt_size = " << opts.size() << std::endl;
             if constexpr (std::is_same_v<NullType, _Upstream>) 
@@ -341,6 +346,7 @@ class RuntimeObj
             }
             
         }
+
     
 };
 
@@ -455,9 +461,16 @@ auto SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::defer(Us... items)
 
         auto kern0 = _upstream->template get_kernel_definition<0>();
 
-        auto r1 = RuntimeObj(up, this, exec_parms, std::move(kern0) );
-
-        return r1;
+        if constexpr( std::is_same_v<decltype(kern0), std::false_type> )
+	{
+          auto r1 = RuntimeObj(up, this, exec_parms );
+          return r1;
+	}
+        else
+	{
+	  auto r1 = RuntimeObj(up, this, exec_parms, std::move(kern0) );
+          return r1;
+	}
         //return RuntimeObj(_upstream->get_runtime(), *this, exec_parms, _upstream->template get_kernel_definition<I>() ... );
       };
     
@@ -485,7 +498,7 @@ SubmitObj<Upstream, Kernel, Parms, ParmPtrs>& SubmitObj<Upstream, Kernel, Parms,
 
 template<typename Upstream, typename Kernel, typename Parms, typename ParmPtrs>
 template< typename ExecParams, typename ... Us>
-void SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::_forward_exec(ulong trans_id, ulong& subaction_id, options& nx_opts, ExecParams nx_params, Us ... items )
+void SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::_forward_exec(ulong trans_id, ulong& subaction_id, v_options& nx_opts, ExecParams nx_params, Us ... items )
 {  
   std::cout << "SubmitObj: Forwareding exec " << std::endl;
   //will call prior forward excute until it gets to the root runtime object
@@ -761,7 +774,7 @@ struct KernelDefinition
 
     private:
 
-      template<size_t N, typename T, typename ... Us>
+      template<size_t N, typename T = NullType, typename ... Us>
       struct sub_type_list
       {
         static constexpr int accumulate( )
@@ -810,4 +823,6 @@ struct KernelDefinition
       kernel_t_decl<k_type> _input_program;
       std::optional<std::string> _kernel_name;
 };
+
+using NULL_KERNEL = KernelDefinition<0, "NullKernel", kernel_t::INT_SRC>;
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////a

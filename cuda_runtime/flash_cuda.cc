@@ -185,28 +185,100 @@ bool flash_cuda::_try_exec_next_pjob( ulong wid )
 }
 
 
+void flash_cuda::_conclude_buffer_placement( pending_job_t& pjob)
+{
+
+  auto tid   = pjob.trans_id;
+  auto sa_id = pjob.subaction_id; 
+	
+  //check if transaction defers deallocation
+  // or if they are flash memory 
+  bool defer_dealloc   = _trans_intf->operator()(tid).check_option(sa_id, trans_options::DEFER_DEALLOC  );
+  bool defer_writeback = _trans_intf->operator()(tid).check_option(sa_id, trans_options::DEFER_WB );
+   
+  for( auto& tvar : pjob.kernel_args )
+    if( tvar.is_flash_mem() )
+    {
+      //if flash memor skip implicit processing
+    }
+    else if( !defer_writeback && defer_dealloc )
+    {
+      //forces a writeback at the end of the transaction
+      //bust dont deallocate buffer
+      _writeback_to_host( tid, tvar );
+    }
+    else if( defer_writeback && !defer_dealloc )
+    {
+      //just edallocate buffer without writing the data back
+      _deallocate_buffer( tid, tvar );
+    }
+    else if( !defer_writeback && !defer_dealloc )
+    {
+      //write back to host and deallocate buffer
+      //just edallocate buffer without writing the data back
+      _writeback_to_host( tid, tvar );
+      _deallocate_buffer( tid, tvar );
+    }
+
+
+}
+
+void flash_cuda::_notify_all_pjobs()
+{
+
+
+}
+
 status flash_cuda::wait( ulong  wid)
 {
   std::cout << "Enttering " << __func__ << std::endl;
   //get job from pending jobs  
   auto entry = _pending_jobs.find( wid);
+  printf("----- Mark 1-------\n");
 
   if( entry != _pending_jobs.end() ) 
   {
+    printf("----- Mark 2-------\n");
     //set context to the job related to wid;
     auto pjob  = entry->second;
     auto tid   = pjob.trans_id;
     auto sa_id = pjob.subaction_id; 
+    printf("----- Mark 3-------\n");
     //////////////////////////////////////////////////////////////////////////////
     auto& sa_payload = _trans_intf->find_sa_within_ta(sa_id, tid);
     auto [num_of_inputs, rt_vars, kernel_args, 
           exec_parms, pre_pred, post_pred] = sa_payload.input_vars();
+    auto is_last_sa = sa_payload.is_last();
+    printf("----- Mark 4-------\n");
     //////////////////////////////////////////////////////////////////////////////
+    //This function 
+    //1} check to see if there is subactions before the current
+    //subaction that also has overlapping write buffers
+    //if there is "wait" else, carry on
+    pre_pred();
+    printf("----- Mark 5-------\n");
 
     _kernel_comps.set_active_context( pjob.cuCtx_key );
     //blocks until job is complete
     std::cout << "Sync'ing ctx..." << std::endl;
-    int ret = cuCtxSynchronize();
+    printf("----- Mark 6-------\n");
+    if (sa_id == 0 )
+      int ret = cuCtxSynchronize();
+    else{
+      if( pjob.pending_launch )
+      {
+        printf("----- Mark 6.5-------\n");
+        pjob.pending_launch();
+        int ret = cuCtxSynchronize();
+      } 
+      else 
+      {
+        printf("No pending jobs...");
+	return status{-1};
+      }
+    }
+    printf("----- Mark 7-------\n");
+
     std::cout << "waiting complete" << std::endl;
     ///////////////release resources/////////////////
     post_pred();
@@ -214,54 +286,23 @@ status flash_cuda::wait( ulong  wid)
     _release_device_buffers( tid, kernel_args );
     /////////////////////////////////////////////////
     std::cout << "Released device buffers" << std::endl;
-    
-    //move data from device buffer to host buffer
-    bool last_saction = _try_exec_next_pjob( wid );
-    std::cout << "completed _try_exec_next" << std::endl;
+    sa_payload.mark_complete();
 
+    _notify_all_pjobs();
     //This means there are no more pending jobs
     //or a specific transaction
-    if( last_saction )
+    if( is_last_sa  )
     {
       std::cout << "Processing last subaction..." << std::endl;
-      //check if transaction defers deallocation
-      // or if they are flash memory 
-      bool defer_dealloc   = _trans_intf->operator()(tid).check_option(sa_id, trans_options::DEFER_DEALLOC  );
-      bool defer_writeback = _trans_intf->operator()(tid).check_option(sa_id, trans_options::DEFER_WB );
-
-       
-      for( auto& tvar : pjob.kernel_args )
-        if( tvar.is_flash_mem() )
-        {
-          //if flash memor skip implicit processing
-        }
-        else if( !defer_writeback && defer_dealloc )
-        {
-          //forces a writeback at the end of the transaction
-          //bust dont deallocate buffer
-          _writeback_to_host( tid, tvar );
-        }
-        else if( defer_writeback && !defer_dealloc )
-        {
-          //just edallocate buffer without writing the data back
-          _deallocate_buffer( tid, tvar );
-        }
-        else if( !defer_writeback && !defer_dealloc )
-        {
-          //write back to host and deallocate buffer
-          //just edallocate buffer without writing the data back
-          _writeback_to_host( tid, tvar );
-          _deallocate_buffer( tid, tvar );
-        }
-
+      _conclude_buffer_placement( pjob );
     }
-
     //remove job
     _pending_jobs.erase( wid);
   }
   else std::cout << "Could not find pending job..." << std::endl;
  
-  return status{};
+  //return status{};
+  return status{1,1};
 }
 
 //status flash_cuda::execute(runtime_vars rt_vars, uint num_of_inputs, 
@@ -271,6 +312,9 @@ status flash_cuda::execute( ulong trans_id, ulong sa_id )
   printf("\nExecuting form cuda-flash_runtime... : tid = %llu, sid = %llu \n", trans_id, sa_id );
   //////////////////////////////////////////////////////////////////////////////
   ulong wid = random_number(); 
+  std::vector<CUdeviceptr> device_buffers;
+  std::function<std::vector<ull>()> deferred_launch;
+
   auto& sa_payload = _trans_intf->find_sa_within_ta(sa_id, trans_id);
   auto [num_of_inputs, rt_vars, kernel_args, 
          exec_parms, pre_pred, post_pred] = sa_payload.input_vars();
@@ -286,6 +330,7 @@ status flash_cuda::execute( ulong trans_id, ulong sa_id )
   std::string kernel_name = rt_vars.kernel_name_override?rt_vars.kernel_name_override.value():rt_vars.get_lookup();
   auto func_binary = _kernel_lib.get_cufunction_for_current_ctx( kernel_name, rt_vars.kernel_impl_override );
   auto ctx_key     = _kernel_comps.get_current_ctx_key();
+  int ret = CUDA_SUCCESS;
   //auto input_kargs = std::vector<te_variable>( kernel_args.begin(), kernel_args.begin() + num_of_inputs);
     //launch kernel
   std::vector<size_t> dims;
@@ -302,8 +347,7 @@ status flash_cuda::execute( ulong trans_id, ulong sa_id )
 
     std::ranges::copy( dims, std::ostream_iterator<size_t>{std::cout, ", "} );
     std::cout << std::endl;
-    int ret = CUDA_SUCCESS;
-    std::function<int()> deferred_launch;
+
 
     if( sa_payload.is_first() ) //eager
     {
@@ -314,8 +358,12 @@ status flash_cuda::execute( ulong trans_id, ulong sa_id )
       _assess_mem_buffers( trans_id, sa_id, kernel_args, dims, sa_kattrs );
       printf("Completed memstate construction....\n");
 
-      std::vector<CUdeviceptr> device_buffers = _checkout_device_buffers( trans_id, kernel_args, table_id, defer );
+      //std::vector<CUdeviceptr> device_buffers = _checkout_device_buffers( trans_id, kernel_args, table_id, defer );
+      device_buffers = _checkout_device_buffers( trans_id, kernel_args, table_id, defer );
       printf("Number of device buffers checkedout = %i \n", device_buffers.size() );
+      deferred_launch = [device_buffers](){
+        return device_buffers;
+      }; 
       //create pending job entry
       //WARNING MAKE SURE this void * is valid during the invocation of the kernel
       //void * is a CUDA back to erase the type of the device pointer.
@@ -355,48 +403,47 @@ status flash_cuda::execute( ulong trans_id, ulong sa_id )
 	void_devs_buffs.back() = (void *) &table_seg;
 	auto dimp = dimps.at(table_seg);
         std::fill_n( std::back_inserter(dimp), 7-dimp.size(), 1 );
-        ret = cuLaunchKernel(func_binary.value(), dimp[3], dimp[1], dimp[2], dimp[0], 
-                             dimp[4], dimp[5], dimp[6], nullptr, void_devs_buffs.data(), 0);
+        ret |= cuLaunchKernel(func_binary.value(), dimp[3], dimp[1], dimp[2], dimp[0], 
+                              dimp[4], dimp[5], dimp[6], nullptr, void_devs_buffs.data(), 0);
   
         if( ret == CUDA_SUCCESS)
         {
           std::cout << "Kernel successfully launched..." << std::endl;
-          //NEED TO ChaNGE to MULTIMAP
-          _pending_jobs.emplace(std::piecewise_construct,
-  	  	              std::forward_as_tuple(wid),
-  		  	      std::forward_as_tuple(trans_id, sa_id, ctx_key, kernel_args, device_buffers, 
-                                                      num_of_inputs, deferred_launch) );
-  
           _job_count_per_ctx.at(ctx_key) += 1;
-  
-          auto stat = status{0, wid };
-  
-          return stat;
         }
-        else std::cout << "Could not launch " << rt_vars.get_lookup() << " : " << ret << std::endl;
+        else 
+	{
+	  std::cout << "Could not launch " << rt_vars.get_lookup() << " : " << ret << std::endl;
+          throw std::runtime_error("Could not launch...");
+	}
       }
-
     }
     else //lazy
     {
       deferred_launch = [&, tid=trans_id, sid=sa_id, 
+		            ckey=ctx_key, fbinary=func_binary, 
 		            edims=dims, kattrs=sa_kattrs,
-                            tab_id=table_id, exdims=dims]()->int
+			    fname=rt_vars.get_lookup(),
+                            tab_id=table_id, exdims=dims]()
       {
         bool defer=false;
         pre_pred();   
         _assess_mem_buffers( tid, sid, kernel_args, exdims, kattrs );
-        std::vector<CUdeviceptr> device_buffers = _checkout_device_buffers( tid, kernel_args, tab_id, defer );
+        std::vector<CUdeviceptr> _device_buffers = _checkout_device_buffers( tid, kernel_args, tab_id, defer );
 
         if(defer) std::logic_error("Buffers are not available");
+
+	printf("\n!!!Launching deferred kernel logic!!!\n");
 
         //create pending job entry
         //WARNING MAKE SURE this void * is valid during the invocation of the kernel
         //void * is a CUDA back to erase the type of the device pointer.
         std::vector<void *> void_devs_buffs;
-        std::ranges::transform(device_buffers, std::back_inserter( void_devs_buffs ),
+        std::ranges::transform(_device_buffers, std::back_inserter( void_devs_buffs ),
       	  	               [](auto& device_buffer) { return (void *) &device_buffer; } );
-        _kernel_comps.set_active_context( ctx_key );
+	printf("\n!!!Transformed deferred device_buffers!!!\n");
+        _kernel_comps.set_active_context( ckey );
+	printf("\n!!!set deferred active context!!!\n");
       
         std::vector<CUdeviceptr> indTableIt;
         //key is the offset address of the parititon
@@ -404,10 +451,15 @@ status flash_cuda::execute( ulong trans_id, ulong sa_id )
 
         if( need_table )
         {
+	  printf("\n!!!Needed table!!!\n");
           auto& table_md = _mem_registry.at( tab_id.value() );
-	  auto cit = cuda_index_table( device_buffers.back(), table_md );
+	  printf("\n!!!Found table!!!\n");
+	  auto cit = cuda_index_table( _device_buffers.back(), table_md );
+	  printf("\n!!!converted table!!!\n");
           indTableIt = cit.range();
+	  printf("\n!!!got range!!!\n");
 	  dimps = cit.get_dim_parts();
+	  printf("\n!!!got dim parts!!!\n");
 	  //creating space for 
           //can be a table buffer or a last parm
           //void_devs_buffs.push_back(nullptr);
@@ -418,45 +470,50 @@ status flash_cuda::execute( ulong trans_id, ulong sa_id )
 	  std::vector<size_t> dim_partition;
 	  //shortcut to bypass theh loop
 	  //this makes  the last buffer an argument
-          indTableIt.emplace_back( device_buffers.back() );
+          indTableIt.emplace_back( _device_buffers.back() );
 
 	  std::ranges::copy(exdims, std::back_inserter(dim_partition) );
-          dimps.emplace(device_buffers.back(), dim_partition );
+          dimps.emplace(_device_buffers.back(), dim_partition );
         }
 
 
         for(auto table_seg : indTableIt )
         {
+	  printf("\n!!!got table parts %i!!!\n", indTableIt.size() );
             //updating base table pointer
   	  void_devs_buffs.back() = (void *) &table_seg;
+	  printf("\n!!!got dim segment!!!\n");
           auto dimp = dimps.at(table_seg);
+	  printf("\n!!!deferred dimp parts!!!\n");
           std::fill_n( std::back_inserter(dimp), 7-dimp.size(), 0 );
+	  printf("\n!!!deferred fill_n!!!\n");
 
-          int res = cuLaunchKernel(func_binary.value(), dimp[0], dimp[1], dimp[2], dimp[3], 
+          int res = cuLaunchKernel(fbinary.value(), dimp[0], dimp[1], dimp[2], dimp[3], 
                                    dimp[4], dimp[5], dimp[6], nullptr, void_devs_buffs.data(), 0);
+	  printf("\n!!!Deferred Kernel launched!!!\n");
           if( ret == CUDA_SUCCESS)
           {
             std::cout << "Kernel successfully launched..." << std::endl;
-    
-            _pending_jobs.emplace(std::piecewise_construct,
-    	  	              std::forward_as_tuple(wid),
-    		  	      std::forward_as_tuple(tid, sid, ctx_key, kernel_args, device_buffers, 
-                                                        num_of_inputs, deferred_launch) );
-    
-            _job_count_per_ctx.at(ctx_key) += 1;
-    
-            auto stat = status{0, wid };
-    
-            return stat;
+            _job_count_per_ctx.at(ckey) += 1;
           }
-          else std::cout << "Could not launch " << rt_vars.get_lookup() << " : " << ret << std::endl;
-            return res;
+          else 
+	  {
+	    std::cout << "Could not launch " << fname << " : " << ret << std::endl;
+            throw std::runtime_error("Could not launch...");
+	  }
 	}
-
-        return CUDA_SUCCESS;
+        return _device_buffers;
       };
 
-    } //end of first_sa else
+    }
+
+    printf("**************\nPending Jobs WID : %i\n*****************\n", wid);
+    _pending_jobs.emplace(std::piecewise_construct,
+      	                  std::forward_as_tuple(wid),
+    	  	          std::forward_as_tuple(trans_id, sa_id, ctx_key, kernel_args,
+                          num_of_inputs, deferred_launch) );
+    auto stat = status{ret, wid };
+    return stat;
 
   } //end  func_binary
   else

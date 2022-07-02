@@ -178,7 +178,7 @@ flash_rt::_manage_buffers( std::string tid, std::string rtk, std::vector<te_vari
 }
 
 status EXPORT flash_rt::execute(runtime_vars rt_vars,  uint num_of_inputs, 
-                         std::vector<te_variable> kernel_args, std::vector<size_t> exec_parms, options& opt)
+                         std::vector<te_variable> kernel_args, std::vector<size_t> exec_parms, v_options& opt)
 {
   std::cout << "calling flash_rt::" << __func__ << std::endl;
   //need to store all arguments for later processing through process_transaction
@@ -368,22 +368,21 @@ status EXPORT flash_rt::process_transaction( ulong tid )
     std::cout << "********************************Wait Section**********************************" << std::endl;
     std::cout << "******************************************************************************" << std::endl;
     ///wait for work to complete
-    auto completed = statuses | std::views::transform([&](auto& stat_future)
+    auto completed = statuses | std::views::transform([&](auto& stat_future) 
     {
       status stat;
 
       if( !stat_future.valid() ) 
       {
         printf("Future is not valid...\n");
-
-        return stat; 
+        return std::future<status>();
       }
      
       stat = stat_future.get();
  
       if ( !stat ) {
         printf("failed to execute....\n");
-        return status{};
+        return std::future<status>();
       }
 
       if( stat.work_id )
@@ -392,23 +391,53 @@ status EXPORT flash_rt::process_transaction( ulong tid )
         std::cout << "waiting on " << wid << " to complete..." << std::endl;
         auto runtime  = _rtrs_tracker.get_create_runtime( rtks.front() ); 
         
-        auto ret = runtime->wait( wid );
-        std::cout << "completed " << wid << std::endl;
-        rtks.erase( rtks.begin() );
+        auto ret = std::async(std::launch::async,
+		   [&]{
+                     auto ret = runtime->wait( wid );
+                     rtks.erase( rtks.begin() );
+	             return ret;
+		   });
+
+	ret.wait();
+        std::cout << "launching wait " << wid << std::endl;
         return ret;
       }
       else 
       {
         std::cout << "-Could not find wid-" << std::endl;
-        return status{-1};
+        return std::future<status>();
       }
 
-    } ); 
+    } ) | std::views::transform([&](auto&& wait_future)
+	 {
+	   ////waits for wait to complete
+	   if(wait_future.valid() )
+	   {
+             std::cout << "issuing wait.... is_valid : " <<wait_future.valid() << std::endl;
+	     wait_future.wait();
+             std::cout << "waiting.... " << std::endl;
+             auto ret = wait_future.get();
+	     if( ret.work_id )
+	     {
+               auto wid = ret.work_id.value();
+               std::cout << "completed .... " << wid << std::endl;
+	       return status{};
+	       //return ret;
+	     }
+	     else 
+	     {
+	       printf("Invalid return for wait future...\n");
+	       return status{-1};
+	     }
+
+	   }
+	   else return status {-1};
+    });
 
     std::cout << "----- starting pipeline" << std::endl;
     auto all_complete = std::ranges::all_of( completed, unary_equals{0}, &status::err );
     std::cout << "----- pipeline complete" << std::endl;
-
+   
     if( all_complete ) std::cout << "successfully completed tid = " << tid << std::endl;
     else std::cout << "failed to complete tid = " << tid << std::endl; 
     

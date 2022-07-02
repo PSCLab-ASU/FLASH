@@ -15,7 +15,7 @@
 
 #pragma once
 
-
+typedef long long unsigned int ull;
 
 struct cuda_context
 {
@@ -275,18 +275,16 @@ struct pending_job_t
   uint nInputs;
   std::string cuCtx_key;
   std::vector<te_variable> kernel_args;
-  std::vector<CUdeviceptr> device_buffers; 
-  std::function<int()> pending_launch;
+  //std::vector<CUdeviceptr> device_buffers; 
+  std::function<std::vector<ull>()> pending_launch;
 
   pending_job_t( ulong tid, ulong sid, std::string ctx_key, std::vector<te_variable> host_buffs, 
-		 std::vector<CUdeviceptr> dev_buffs, uint num_inputs, 
-                 std::function<int()> deffered_launch )
+		 uint num_inputs, std::function<std::vector<ull>()> deffered_launch )
   {
     trans_id       = tid;
     subaction_id   = sid;
     cuCtx_key      = ctx_key;
     kernel_args    = host_buffs;
-    device_buffers = dev_buffs;
     nInputs        = num_inputs;
     pending_launch = deffered_launch;
   }
@@ -562,6 +560,9 @@ class flash_cuda : public IFlashableRuntime
 
     flash_cuda();
 
+    void _notify_all_pjobs(); //TBD
+
+    void _conclude_buffer_placement( pending_job_t& ); //TBD
 
     void _retain_cuda_contexts();
 

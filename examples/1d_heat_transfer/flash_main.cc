@@ -28,12 +28,12 @@ int main(int argc, const char * argv[])
     //the compute_heat converts into two distinct kernel launches
     //with the implicit barrier we can absorb the swapping between 
     //arr and arr_next, then that process repeats n_iter times.
-    //ocrt.submit(HEAT_TRANSFER_K{}, n_points, arr, arr_next ).defer(n_points + 2)
-    //    .submit(HEAT_TRANSFER_K{"compute_heat"}, n_points, arr, arr_next )
-    //    .exec(n_points + 1, n_stages, n_iter);
-    ocrt.submit(htk, n_points, arr, arr_next ).exec(n_points + 2);
+    ocrt.submit(HEAT_TRANSFER_K{}, n_points, arr, arr_next ).defer(n_points + 2)
+        .submit(HEAT_TRANSFER_K{"compute_heat"}, n_points, arr, arr_next )
+        .exec(n_points + 1, n_stages, n_iter);
+    //ocrt.submit(htk, n_points, arr, arr_next ).exec(n_points + 2);
     
-    //Read new positionaa
+    //Read new position
     //data() method returns a std::vector and implicitly and transfer the
     //entre device buffer to host
     //auto& points = arr.data();

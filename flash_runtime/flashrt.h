@@ -100,7 +100,7 @@ class flash_rt
                              std::optional<std::string> []  );
 
     status execute( runtime_vars, uint, std::vector<te_variable>, 
-                    std::vector<size_t>, options& ); 
+                    std::vector<size_t>, v_options& ); 
    
     status allocate_buffer( te_variable& );
 

@@ -32,7 +32,7 @@ struct option
  
 };
 
-typedef std::vector<option> options;
+typedef std::vector<option> v_options;
 
 struct subaction
 {
@@ -42,11 +42,12 @@ struct subaction
   runtime_vars rt_vars;
   std::vector<te_variable> kernel_args;
   std::vector<size_t> exec_parms;
-  options lopts;
+  v_options lopts;
   std::function<int()> pre_pred, post_pred;
 
   //first = true, last = false, none = intermediate
   std::optional<bool> first_last_int; 
+  bool done=false;
 
   //table references
   o_string _index_table_key;
@@ -67,9 +68,12 @@ struct subaction
   }
 
   void set_intrm(){ first_last_int.reset(); }
-  bool is_intrm() { return !( (bool) first_last_int); }
+  void mark_complete(){ done = true; }
 
-  options  get_options(){ return lopts; }
+  bool is_intrm() { return !( (bool) first_last_int); }
+  bool is_done() { return done; }
+
+  v_options  get_options(){ return lopts; }
 
   te_attrs get_kattrs(){ return get_rtvars().kAttrs; }
 
@@ -167,7 +171,7 @@ class transaction_interface : protected transaction_vars
       return false;
     }
 
-    options get_options( ulong, std::optional<ulong> tid = {} );
+    v_options get_options( ulong, std::optional<ulong> tid = {} );
 
     std::pair<std::function<int()>, std::function<int()> >
     get_pred( ulong sa_id );
