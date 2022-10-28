@@ -4,8 +4,9 @@
 
 //Adapted for FLASH from https://github.com/oneapi-src/oneAPI-samples.git
 //DirectProgramming/DPC++/N-BodyMethods/Nbody
-                                                                                       //in   //in    //inout   //inout  //inout
-using PARTICLE_K = KernelDefinition<2, "particle_init",  kernel_t::EXT_BIN, GroupBy<2>, ulong, float*, float**,  float**, float** >; 
+//in   //in    //inout   //inout  //inout
+using PARTICLE_K  = KernelDefinition<1, "particle_init",     kernel_t::EXT_BIN, size_t >; 
+using PARTICLE_K2 = KernelDefinition<2, "process_particles",  kernel_t::EXT_BIN, GroupBy<2>, ulong, float*, float*,  float*, float* >; 
 
 
 struct Particles
@@ -45,7 +46,8 @@ Particles::Particles(size_t n_parts)
   //The sort_by is ignored due to the fact that there is no second dimension in this 
   //launch just a single dimention
   RuntimeObj ocrt;
-  ocrt.submit(PARTICLE_K{}, n_particles, mass, pos, vels, accs ).exec( n_particles );
+  ocrt.options( global_options::DEFER_OUTPUT_DEALLOC )
+      .submit(PARTICLE_K{}, n_particles, mass, pos, vels, accs ).exec( n_particles );
 
 }
 
@@ -55,8 +57,9 @@ int main(int argc, const char * argv[])
    
     size_t n_particles=16000, y_stages=2, time_steps=10;
 
-    //RuntimeObj ocrt(flash_rt::get_runtime("NVIDIA_GPU") , PARTICLE_K{ argv[1] } );
-    RuntimeObj ocrt("NVIDIA_GPU", PARTICLE_K{ argv[1] } );
+    RuntimeObj ocrt(PARTICLE_K{argv[0]} , 
+		    PARTICLE_K2{ argv[0] } );
+    //ocrt.options( global_options::COMMIT_IMPLS);
 
     //Intitializing is also acclerated by accelerators
     Particles ps(n_particles);
@@ -66,8 +69,7 @@ int main(int argc, const char * argv[])
     //two steps in the 'y' dimension with an implicit barrier
     //and those repeated 10 times
     //flash memory is used to bypass the host write back from the initalization stage
-    ocrt.submit(PARTICLE_K{"process_particles"}, n_particles, ps.mass, ps.pos, ps.vels, ps.accs, &ps.energy )
-        .exec(n_particles, y_stages, time_steps);
+    ocrt.submit(PARTICLE_K2{}, n_particles, ps.mass, ps.pos, ps.vels, ps.accs, &ps.energy ).exec(n_particles, y_stages, time_steps);
 
     //Read new positionaa
     /*auto& fpos = ps.pos;
@@ -81,7 +83,6 @@ int main(int argc, const char * argv[])
     }
     */
     std::cout << "Total energy : " << ps.energy << std::endl;
-
 
     return 0;
 }

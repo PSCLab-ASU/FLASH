@@ -7,32 +7,6 @@
 
 #pragma once
 
-struct option
-{
-  option( global_options gops) { _gopts = gops; }
-  option( trans_options tops)  { _topts = tops; }
-  option( subaction_options sopts) { _sopts = sopts; }
-
-  template <typename Opt_t>
-  bool check( Opt_t opt)
-  {
-    if constexpr( std::is_same_v<Opt_t, global_options> )
-      return _gopts && (_gopts.value() == opt); 
-    else if constexpr( std::is_same_v<Opt_t, trans_options> )
-      return _topts && (_topts.value() == opt); 
-    else if constexpr( std::is_same_v<Opt_t, subaction_options> )
-      return _sopts && (_sopts.value() == opt); 
- 
-    return false;
-  }
-
-  std::optional<global_options>    _gopts;
-  std::optional<trans_options>     _topts;
-  std::optional<subaction_options> _sopts;
- 
-};
-
-typedef std::vector<option> v_options;
 
 struct subaction
 {
@@ -157,18 +131,21 @@ class transaction_interface : protected transaction_vars
     template<typename T>
     bool check_option( ulong sa_id, T ops, std::optional<ulong> tid_ovr = {} )
     {
-      bool ret = false;
+      bool exists = false;
       auto tr_id = tid_ovr.value_or( _tid.value() );
       auto& sa_payload = find_sa_within_ta(sa_id, tr_id);
-      auto& options = sa_payload.lopts;
+      auto& sa_options = sa_payload.lopts;
+      auto  rt_options = sa_payload.rt_vars.get_rtops();
 
       auto check_opt = std::bind( &option::check<T>, std::placeholders::_1, ops );
   
-      bool exists = std::ranges::any_of( options, check_opt );
+      //Checks to see if subaction option exists
+      exists = std::ranges::any_of( sa_options, check_opt );
+      //Checks to see if runtime options exists
+      exists |= std::ranges::any_of( rt_options, check_opt );
 
-      return ret;
+      return exists;
       
-      return false;
     }
 
     v_options get_options( ulong, std::optional<ulong> tid = {} );

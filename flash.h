@@ -18,6 +18,7 @@
 #include <flash_runtime/flash_sync.h>
 #include <flash_runtime/flash_part.h>
 #include <flash_runtime/flash_memory.h>
+#include <flash_runtime/flash_loops.h>
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////API relies on Runtime implementation thread-safety, and singleton//////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -59,7 +60,8 @@ struct SubmitObj
   template<std::unsigned_integral ... Us>
   SubmitObj<Upstream, Kernel, Parms, ParmPtrs>& sizes(Us... sizes);
 
-  template<std::unsigned_integral ... Us>
+  //template<std::unsigned_integral ... Us>
+  template<typename ... Us>
   ExecObj< SubmitObj<Upstream, Kernel, Parms, ParmPtrs > > exec(Us... items);
 
   template<std::unsigned_integral ... Us >
@@ -82,7 +84,7 @@ struct SubmitObj
     void _set_directionality();
 
     template<typename T>
-    void add_options( T local_ops)
+    void options( T local_ops)
     {
       if constexpr( std::is_same_v<T, v_options> )
       {
@@ -95,7 +97,12 @@ struct SubmitObj
 
     } 
 
-    v_options get_ops() { return _opts; }
+    v_options get_options() { return _opts; }
+
+    void set_subaction_id( size_t id )
+    {
+      _subaction_id = id;
+    }
 
     template<typename ... Args>
     void _calc_sz_from_contrs(Args&& ...  );
@@ -106,8 +113,8 @@ struct SubmitObj
     auto _get_buffer_ptrs() -> std::array<std::add_pointer_t<void>, ParmSize >;
 
      //start forward execution path
-    template<typename ExecParams, typename ... Us>
-    void _forward_exec(ulong, ulong&, v_options&,  ExecParams Params,  Us ... );
+    template<typename ExecParams, typename LoopCurator, typename ... Us>
+    void _forward_exec(ulong, ulong&, v_options&, LoopCurator&,  ExecParams,  Us ... );
 
     template<typename T> friend class ExecObj;
 
@@ -120,6 +127,7 @@ struct SubmitObj
     std::array<size_t, ParmSize > _sizes;
     std::array<ParmAttr, ParmSize > _bufferAttrs;
     v_options _opts = {};
+    size_t _subaction_id;
 };
 
 
@@ -205,7 +213,28 @@ class RuntimeObj
       }
 
     }
-   
+  
+    template<typename ... Us>
+    void exec( Us... loop_ctrls )
+    {
+      if ( (... && std::is_integral_v<Us>) )
+        if( _loop_ctrl == loop_behavior::CASCADE )
+	{
+          auto cal  = cascade_loop(_subaction_id, std::forward<Us>(loop_ctrls)...);
+          auto cul  = cal.get_base();
+          loop_curator lc; 
+          lc.add_loops( cul );	  
+          //call upstream exec (from submission object with no items)
+          if( _upstream ) (*_upstream)->exec( lc );
+	 
+	}
+        else
+	{
+          if( _upstream ) (*_upstream)->exec(1UL );
+	}
+
+    }
+
     template< typename KD, typename... Args >
     auto submit(KD kernel_def, Args&&... args)
     {  
@@ -216,7 +245,8 @@ class RuntimeObj
         auto sv = SubmitObj(*this, kernel_def, 
                             std::make_tuple( _scalar_parm_conv(std::forward<Args>(args))... ),
                             std::make_tuple( _scalar_parm_conv(args)... ) );
-        
+
+        sv.set_subaction_id( _subaction_id );
         sv.reconcile_args( std::forward<Args>(args)... );
                 
         return sv;
@@ -241,9 +271,22 @@ class RuntimeObj
 
     //TBD fill in for retaining all buffers
     template< typename... Us>
-    RuntimeObj& options(Us... ts){
-      ushort opts[sizeof...(Us)] = { ((ushort)ts)... };
+    RuntimeObj& options(Us... ops){
+
+      if constexpr( (sizeof...(ops) == 1) &&  (... && std::is_same_v<Us, v_options>) )
+      {
+        _opts.insert(std::end(_opts), std::begin(ops)..., std::end(ops)... );  
+      }
+      else
+      {
+        int opts[sizeof...(Us)] = { ( _opts.emplace_back(ops), 0)... };
+      }
+
       return *this;
+    }
+
+    v_options get_options(){
+      return _opts;
     }
 
     private: 
@@ -260,12 +303,20 @@ class RuntimeObj
 
         RuntimeImpl_t get_runtime(){ return _runtimeImpl; }
 
+        void set_subaction_id( size_t id )
+	{
+          _subaction_id = id;
+	}
+
         //This is incase a deferment occurs
         //std::optional<Upstream> _upstream;
         std::optional<Upstream_t>   _upstream;
         RuntimeImpl_t               _runtimeImpl;
         Registry_t                  _registry;
 	std::optional<ExecParams_t> _exec_params;
+        v_options                   _opts;
+	loop_behavior               _loop_ctrl=loop_behavior::CASCADE; 
+        size_t                      _subaction_id;
 
         template< size_t N, typename Kernel>
         auto _get_directions( );
@@ -285,28 +336,31 @@ class RuntimeObj
                                 Kernel::Get_NInOutArgs();
             std::cout << "Executing '" << kname_ovr.value_or(base_kname) << "'..." << std::endl;
             constexpr size_t NArgs = std::tuple_size_v<P>;
-                        
+            
+            	    
             auto _te_buffers = erase_tuple( buffers, buffer_attrs, sizes );            
 
-
+            
             _runtimeImpl->register_kernels(1, &kernel_type, &base_kname, &kname_ovr, &input);
 
             std::cout << "Finished registering of runtime kernel in exec" << std::endl;
             std::cout << "rt_vars base_kname = " << base_kname << std::endl;
             std::cout << "rt_vars kname_ovr = " << kname_ovr.value_or("NoKernel") << std::endl;
-
+            
             auto _rt_vars    = runtime_vars{ base_kname,      //Base kernel name
                                              kernel_type,
                                              kname_ovr,       //new method detials
                                              input,           //method_override
                                              kernel.simplify_kattrs()  };
+            //setting runtime ops
+	    _rt_vars.set_rtops( _opts );
 
             std::cout << "rt_vars base_kname = " << _rt_vars.get_lookup() << std::endl;
             std::cout << "rt_vars kname_ovr = " << _rt_vars.get_kname_ovr().value_or("NoKernel") << std::endl;
 	    //set transactio information
             _rt_vars.associate_transactions( trans_sub_id );
 
-
+            
 	    if constexpr ( std::is_same_v<ExecParams, NullType>  )
 	    {
               std::cout << "Exec : ";
@@ -319,19 +373,19 @@ class RuntimeObj
               auto arr = get_array_from_tuple( successor_params );
 	      exec_params  = std::vector<size_t>( arr.begin(), arr.end() );
             }
-
             
+                       
 	    std::ranges::copy(exec_params, std::ostream_iterator<size_t>{std::cout, ", "} );
 	    std::cout << std::endl;
 
             std::cout << "FLASHRT : EntryPoint"<< std::endl;
-            _runtimeImpl->execute( _rt_vars, num_inputs, _te_buffers, exec_params, opts ); 
+            //_runtimeImpl->execute( _rt_vars, num_inputs, _te_buffers, exec_params, opts );  
             //money maker: this function will interface with the runime Object
         }
 
         //does nothing in runtime obj
-        template<typename ExecParams, typename ... Us>
-        void _forward_exec( ulong tid, ulong& sa_id, v_options& opts, ExecParams, Us ... items) 
+        template<typename ExecParams, typename LoopCurator, typename ... Us>
+        void _forward_exec( ulong tid, ulong& sa_id, v_options& opts, LoopCurator& loc, ExecParams, Us ... items) 
         {
             std::cout << "RuntimeObj : _forward_exec opt_size = " << opts.size() << std::endl;
             if constexpr (std::is_same_v<NullType, _Upstream>) 
@@ -340,7 +394,7 @@ class RuntimeObj
             }
             else
             {
-              if( _upstream ) (*_upstream)->_forward_exec(tid, sa_id, opts,
+              if( _upstream ) (*_upstream)->_forward_exec(tid, sa_id, opts, loc,
                                                           _exec_params.value(), items...);
               else std::cout << "Could not find upstream" << std::endl;    
             }
@@ -424,19 +478,33 @@ SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::SubmitObj(Upstream upst,
 }
 
 template<typename Upstream, typename Kernel, typename Parms, typename ParmPtrs>
-template<std::unsigned_integral ... Us>
+//template<std::unsigned_integral ... Us>
+template<typename ... Us>
 ExecObj< SubmitObj<Upstream, Kernel, Parms, ParmPtrs> > 
 SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::exec(Us... items)
 {
   std::cout << "Start exec..." << std::endl;
-  ulong subaction_id = 0;
+  loop_curator loopc;
+
+ 
 
   //create a unique_id and makes sure thier is no conflicting Id
   ulong transaction_id = _upstream->get_runtime()->create_transaction();
   std::cout << "Exec: create_transaction..." << transaction_id << std::endl;
   //ulong transaction_id = flash_rt::get_runtime()->create_transaction();
   //execute kernels from root node, forward
-  _forward_exec(transaction_id, subaction_id, _opts, NullType{}, items...);
+  ulong subaction_id = 0;
+  if constexpr( (sizeof...(Us) == 1) &&
+		( ... && std::is_same_v<Us, loop_curator> ) )
+  {
+    loopc = {items...};
+    _forward_exec(transaction_id, subaction_id, _opts, loopc, NullType{} );
+  }
+  else
+  {
+    _forward_exec(transaction_id, subaction_id, _opts, loopc, NullType{}, items...);
+  }
+
   std::cout << "Exec: forward_exec..." << std::endl;
 
   _upstream->get_runtime()->process_transaction( transaction_id );
@@ -464,14 +532,21 @@ auto SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::defer(Us... items)
         if constexpr( std::is_same_v<decltype(kern0), std::false_type> )
 	{
           auto r1 = RuntimeObj(up, this, exec_parms );
+	  //transfer / forward optitons to the following runtime object
+	  r1.options( _upstream->get_options() );
+	  r1.set_subaction_id( ++_subaction_id );
+
           return r1;
 	}
         else
 	{
 	  auto r1 = RuntimeObj(up, this, exec_parms, std::move(kern0) );
+	  //transfer / forward optitons to the following runtime object
+	  r1.options( _upstream->get_options() );
+	  r1.set_subaction_id( ++_subaction_id );
           return r1;
 	}
-        //return RuntimeObj(_upstream->get_runtime(), *this, exec_parms, _upstream->template get_kernel_definition<I>() ... );
+        
       };
     
     return func2(Indices{}); 
@@ -481,7 +556,7 @@ auto SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::defer(Us... items)
   ///Default: Add options to bypass copyback of buffers///
   ////////////////////////////////////////////////////////
   std::cout << "Defer : (before) _opt.size() " << _opts.size() << std::endl;
-  add_options( subaction_options::DEFER_WB );
+  options( subaction_options::DEFER_WB );
   std::cout << "Defer : (after) _opt.size() " << _opts.size() << std::endl;
    
   return func1();
@@ -497,29 +572,36 @@ SubmitObj<Upstream, Kernel, Parms, ParmPtrs>& SubmitObj<Upstream, Kernel, Parms,
 }
 
 template<typename Upstream, typename Kernel, typename Parms, typename ParmPtrs>
-template< typename ExecParams, typename ... Us>
-void SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::_forward_exec(ulong trans_id, ulong& subaction_id, v_options& nx_opts, ExecParams nx_params, Us ... items )
+template< typename ExecParams, typename LoopCurator, typename ... Us>
+void SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::_forward_exec(ulong trans_id, ulong& subaction_id, 
+		                                                 v_options& nx_opts, LoopCurator& loc,  ExecParams nx_params, Us ... items )
 {  
   std::cout << "SubmitObj: Forwareding exec " << std::endl;
   //will call prior forward excute until it gets to the root runtime object
-  _upstream->_forward_exec(trans_id, subaction_id, _opts, nx_params, items...);
+  _upstream->_forward_exec(trans_id, subaction_id, _opts, loc, nx_params, items...);
 
-  //Executing 
-  std::cout << "SubmitObj: Executing subaction... : opt.size = " << _opts.size() <<  std::endl;
-  auto trans_sub_id = std::make_pair(trans_id, subaction_id );
-  _upstream->execute(trans_sub_id, _override_kernel, _buffers, _bufferAttrs, _sizes, _opts, nx_params, std::make_tuple(items...) );
-
-  std::cout << "subaction id = " << subaction_id << std::endl;
-  subaction_id++;
+  if constexpr ( sizeof...(Us) )
+  {
+    //Executing 
+    std::cout << "SubmitObj: Executing subaction... : opt.size = " << _opts.size() <<  std::endl;
+    auto trans_sub_id = std::make_pair(trans_id, subaction_id );
+    _upstream->execute(trans_sub_id, _override_kernel, _buffers, _bufferAttrs, _sizes, _opts, nx_params, std::make_tuple(items...) );
+    std::cout << "subaction id = " << subaction_id << std::endl;
+    subaction_id++;
+  } 
+  else 
+  { 
+    std::cout << "Bypassing execution for zero iterations" << std::endl; 
+  }
+  
 }
 
 template<typename Upstream, typename Kernel, typename Parms, typename ParmPtrs>
 template<typename T>
 size_t SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::_get_size( T&& arg )
 {
-  if constexpr ( IsContainer<T> || IsAttribute<T> )
+  if constexpr ( IsContainer<T> || IsFMEM<T> )
   {
-    std::cout << __func__ << " : size : " << arg.size() << std::endl;
     return arg.size();
   } 
   else
@@ -563,10 +645,12 @@ void SubmitObj<Upstream, Kernel, Parms, ParmPtrs>::reconcile_args( Args&&... arg
  
   std::cout << __func__ << " : Mark 1 opt.size() = " << _opts.size() <<  std::endl;
   std::vector<ParmAttr > arg_type = 
-  { ParmAttr{ IsPointer<decltype(args)>, 
-              IsContainer<decltype(args)>, 
+  {
+    ParmAttr{ IsPointer<decltype(args)>, 
+              IsContainer<decltype(args)> | IsFMEM<Args>, 
               IsAttribute<decltype(args)>, 
-              std::is_rvalue_reference_v<decltype(args)>  } ... 
+              std::is_rvalue_reference_v<decltype(args)>  }
+    ... 
   };
   
   for( auto parm : arg_type ) 

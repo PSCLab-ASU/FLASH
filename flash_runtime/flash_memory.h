@@ -14,8 +14,9 @@ struct flash_memory : public Attr
 {
 
   static constexpr int N_elements = sizeof(T) / N;
-  using static_cache_t  = std::array<T, Prefetch>;
-  using dynamic_cache_t = std::vector<T>;
+  using base_t          = std::remove_pointer_t<std::decay_t<T> >;
+  using static_cache_t  = std::array<base_t, Prefetch>;
+  using dynamic_cache_t = std::vector<base_t>;
 
   template<IsPointer U>
   constexpr flash_memory(size_t size,
@@ -27,7 +28,7 @@ struct flash_memory : public Attr
   }
 
   constexpr flash_memory(size_t size,
-                          std::shared_ptr<T> buffer,
+                          std::shared_ptr<base_t> buffer,
                           size_t prefetch = Prefetch )
   : Attr(KATTR_FMEM_ID)
   {
@@ -50,7 +51,8 @@ struct flash_memory : public Attr
     
   }
 
-  size_t get_id() { return _app_handle; }
+  //size_t get_id() { return _app_handle; }
+  std::string get_id() { return std::to_string(_app_handle); }
 
   size_t get_type_size() { 
     if( std::is_same_v<T, NullType> )
@@ -65,7 +67,7 @@ struct flash_memory : public Attr
   //get the host buffer
   auto data()
   {
-    return (T *) _buffer.get();
+    return _buffer.get();
     //if constexpr( N_elements == 1) return _buffer.get();
     //else return (T *) _buffer.get();
   }
@@ -73,10 +75,10 @@ struct flash_memory : public Attr
   size_t size(){ return _size; }
 
   //get prefetch buffer
-  T * get_prefetch_data() {
-    T * out;
+  base_t* get_prefetch_data() {
+    base_t * out;
     std::visit([&](auto cache) {
-      out = cache.data();  
+      out = reinterpret_cast<base_t *>(cache.data());  
     }, _cache);
     return out;
   }
@@ -90,27 +92,35 @@ struct flash_memory : public Attr
   private:
 
     constexpr void _flash_memory(size_t size,
-                                std::shared_ptr<T> buffer,
+                                std::shared_ptr<base_t> buffer,
                                 size_t prefetch )
-    {
+    { 
+      printf("Ctor'ing flash_memeory...\n");
+
       _size     = size;
       _prefetch = prefetch;
       _owner    = true;
       _app_handle = random_number();
+      printf("--Mark A...\n");
 
-      if( buffer )
+      if( buffer ){
+        printf("--Mark B1...\n");
         _buffer   = buffer;
-      else
-        _buffer   = std::make_shared<T>( size );
-
+      }
+      else{
+        printf("--Mark B2...\n");
+        _buffer   = std::shared_ptr<base_t>( (base_t *) malloc( size*sizeof(T)) );
+      }
 
       if( prefetch <= Prefetch){
+         printf("--Mark C1...\n");
          /* use static buffer */   
-       _cache = static_cache_t();  
+        _cache = static_cache_t();  
       }
       else {
+        printf("--Mark C2...\n");
          /* use dynamic buffer */
-       _cache = dynamic_cache_t( prefetch );
+        _cache = dynamic_cache_t( prefetch );
       }
 
     }
@@ -122,8 +132,8 @@ struct flash_memory : public Attr
     size_t _prefetch;
     std::optional<size_t> _app_handle_ovr;
     std::optional<size_t> _flash_handle;
-    std::shared_ptr< T > _buffer;
- 
+    std::shared_ptr< base_t > _buffer;
+
     std::variant< static_cache_t, dynamic_cache_t> _cache;
 };
 

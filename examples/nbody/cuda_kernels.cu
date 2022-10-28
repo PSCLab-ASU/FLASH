@@ -8,35 +8,36 @@
 void __device__ _update_particle_accel(float *, float, float * , float&, float&, float& );
 void __device__ _calc_energy(  float, float *, float *, float *, float& );
 
-__global__ void particle_init( unsigned long n_particles, float * mass, float ** positions, float ** velocities, 
-                               float ** accelerations, size_t ** ttable)
+__global__ void particle_init( size_t  n_particles, 
+		               float * mass, float * positions, 
+			       float * velocities, float * accelerations)
 {
   size_t p = 3 * (blockIdx.x*blockDim.x + threadIdx.x);
-  float * _pos = (float *) positions; 
-  float * _vel = (float *) velocities;
-  float * _acc = (float *) positions;
+  float * _pos =  positions; 
+  float * _vel =  velocities;
+  float * _acc =  positions;
  
-  curandStatePhilox4_32_10_t state;                    
-  curand_init(1234, 0, p, &state);               
+  curandStatePhilox4_32_10_t state;
+  curand_init(1234, 0, p, &state);
   //////////////////////////////////////////////////////                                                     
-  mass[p] = n_particles * curand_uniform(&state);    
-  _pos[p] = curand_uniform(&state);    
+  mass[p] = n_particles * curand_uniform(&state); 
+  _pos[p] = curand_uniform(&state); 
   _vel[p] = curand_uniform(&state) * ( 2.99999) - 1; 
   _acc[p] = 0;
   //////////////////////////////////////////////////////
-  _pos[p + 1] = curand_uniform(&state);    
-  _vel[p + 1] = curand_uniform(&state) * ( 2.99999) - 1;  
+  _pos[p + 1] = curand_uniform(&state);
+  _vel[p + 1] = curand_uniform(&state) * ( 2.99999) - 1; 
   _acc[p + 1] = 0;
   //////////////////////////////////////////////////////
-  _pos[p + 2] = curand_uniform(&state);    
-  _vel[p + 2] = curand_uniform(&state) * ( 2.99999) - 1;  
-  _acc[p + 2] = 0;                         
+  _pos[p + 2] = curand_uniform(&state);
+  _vel[p + 2] = curand_uniform(&state) * ( 2.99999) - 1; 
+  _acc[p + 2] = 0; 
   
 }
 
-
 __global__ void process_particles( unsigned long num_particles, 
-                                   float * mass, float ** positions, float ** velocities, float ** accelerations, 
+                                   float * mass, float * positions, 
+				   float * velocities, float * accelerations, 
                                    float * energy, size_t ** ttable)
 {
   

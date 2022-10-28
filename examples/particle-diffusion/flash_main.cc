@@ -69,10 +69,11 @@ Particles::Particles(size_t n_parts, size_t iter, ulong grid_size, ulong planes)
 int main(int argc, const char * argv[])
 {
     ulong grid_size=22, planes=3;
-    size_t n_particles=256, n_iter=10000;
+    size_t n_particles=256, n_iter=512;
     float radius = 0.5f;
 
     RuntimeObj ocrt(PARTICLE_K{ argv[0] }, PARTICLE_K2{ argv[0] } );
+    //RuntimeObj ocrt( PARTICLE_K{ argv[0] } );
     ocrt.options(global_options::COMMIT_IMPLS);
 
     //Intitializing is also acclerated by accelerators
@@ -87,7 +88,7 @@ int main(int argc, const char * argv[])
     ocrt.submit(PARTICLE_K2{}, grid_size, n_particles, radius, 
                                n_particles*3, ps.grid, ps.posX, 
                                ps.posY, ps.randX, ps.randY ).exec(n_particles, n_iter);
-
+    
     //transfers data from device to host completely
     /*auto& Xs = ps.posX.data();
     auto& Ys = ps.posY.data();

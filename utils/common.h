@@ -29,10 +29,12 @@ const std::string g_NotImpl   = "NotImpl";
 const std::string g_NoAlloc   = "NoAlloc";
 const std::string g_NoRuntime = "ALL";
 
+enum struct loop_behavior     {CASCADE=0, SEQ, CUSTOM};
+
 enum struct global_options    {DEFER_DEALLOC=0, 
 	                       DEFER_WB, 
 			       COMMIT_IMPLS, 
-			       DEFFER_OUTPUT_DEALLOC,  
+			       DEFER_OUTPUT_DEALLOC,  
 			       G_OPT_END };
 enum struct trans_options     {DEFER_DEALLOC=(ushort)global_options::G_OPT_END, 
 	                       DEFER_WB, 
@@ -42,6 +44,33 @@ enum struct subaction_options {DEFER_DEALLOC=(ushort)trans_options::T_OPT_END,
 	                       DEFER_WB, 
 			       DEFFER_OUTPUT_DEALLOC,  
 			       S_OPT_END };
+
+struct option
+{
+  option( global_options gops) { _gopts = gops; }
+  option( trans_options tops)  { _topts = tops; }
+  option( subaction_options sopts) { _sopts = sopts; }
+
+  template <typename Opt_t>
+  bool check( Opt_t opt)
+  {
+    if constexpr( std::is_same_v<Opt_t, global_options> )
+      return _gopts && (_gopts.value() == opt); 
+    else if constexpr( std::is_same_v<Opt_t, trans_options> )
+      return _topts && (_topts.value() == opt); 
+    else if constexpr( std::is_same_v<Opt_t, subaction_options> )
+      return _sopts && (_sopts.value() == opt); 
+ 
+    return false;
+  }
+
+  std::optional<global_options>    _gopts;
+  std::optional<trans_options>     _topts;
+  std::optional<subaction_options> _sopts;
+ 
+};
+
+typedef std::vector<option> v_options;
 
 enum {KATTR_SORTBY_ID=0, KATTR_GROUPBY_ID, KATTR_FMEM_ID };
 
@@ -80,12 +109,16 @@ struct ParmAttr{
 template< typename T>
 concept IsAttribute = std::is_base_of_v<Attr, T>;
 
+template<typename T>
+concept IsFMEM = IsAttribute<std::remove_reference_t<T>>;
+
 template<typename T, typename U=std::remove_reference_t<T> >
 concept IsContainer = requires (U a){
   typename U::value_type;
   { a.data() } -> std::same_as<std::add_pointer_t<std::remove_reference_t<typename U::value_type> > >;
   a.size();
 };
+
 
 
 template<typename T>
@@ -118,6 +151,7 @@ struct runtime_vars
   std::optional<std::string> kernel_name_override;
   std::optional<std::string> kernel_impl_override;
   te_attrs kAttrs;
+  v_options _rtops;
   std::pair<ulong, ulong> trans_subaction_id;
 
   std::string get_lookup(){ return lookup; } 
@@ -131,6 +165,9 @@ struct runtime_vars
     get_kimpl(){ return kernel_impl_override; }
   
   std::pair<ulong, ulong> get_ids() { return trans_subaction_id; }
+
+  void set_rtops( v_options rtops) { _rtops = rtops; }
+  v_options get_rtops( ) { return _rtops; }
 
   void associate_transactions( auto trans_sa_id )
   {
@@ -206,7 +243,7 @@ struct flash_variable
 struct te_variable
 {
   void * data;
-  uint type_size;
+  size_t type_size;
   size_t vec_size; 
   ParmAttr parm_attr;
   std::optional<flash_variable> flash_buffer_vars;
@@ -244,6 +281,8 @@ std::vector<te_variable> erase_tuple( std::tuple<Ts...>& tup,  std::array<ParmAt
 {
   /* important note: tup is being passed by reference becayse the parameters are being converted to pointers
    * and must live after this function retruns */  
+  printf("Entering erase_tuple fmem....\n");
+
   std::vector<te_variable> _te_vars;
   using tuple_type = std::tuple<Ts...>;
 
@@ -251,21 +290,27 @@ std::vector<te_variable> erase_tuple( std::tuple<Ts...>& tup,  std::array<ParmAt
   {
     auto te_conv = [&](size_t Idx, auto&& arg  )
     {
-      const bool is_flash_mem = IsAttribute<std::remove_pointer_t<decltype(arg)> >;
+      //const bool is_flash_mem = IsFMEM<std::remove_pointer_t<decltype(arg)> >;
+      const bool is_flash_mem = IsFMEM<decltype(*arg) >;
       te_variable te; 
       if constexpr ( !is_flash_mem )
       { 
-        using Arg = std::remove_pointer_t<decltype(arg) >;
+        printf("!!!!!!!!!!!!!!!!!! Found Normal Parm!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+        using Arg = std::remove_pointer_t< std::remove_reference_t<decltype(arg)> >;
 
-        //primitive data types
+        //primitive data typesa
         if constexpr( IsContainer< Arg > )
         {
-          te = te_variable { reinterpret_cast<void *>( arg->data() ),
-                             sizeof(Arg::value_type),
-                             arg.size(), parm_attr[Idx], {} };
+          ulong size_type = sizeof(typename Arg::value_type);
+          printf("------>Container size = %llu, type_size = %llu <--------\n", arg->size(), size_type );
+	  te = te_variable { reinterpret_cast<void *>( arg->data() ),
+                             size_type,
+                             arg->size(), parm_attr[Idx], {} };
         }
         else
         {
+          printf("------>scalar size = %llu, type_size = %llu<--------\n", sizes[Idx], 
+			                                                   sizeof(std::remove_pointer_t<decltype(arg)>) );
           te = te_variable { reinterpret_cast<void *>( arg ),
                              sizeof(std::remove_pointer_t<decltype(arg)>),
                              sizes[Idx], parm_attr[Idx], {} };
@@ -274,12 +319,15 @@ std::vector<te_variable> erase_tuple( std::tuple<Ts...>& tup,  std::array<ParmAt
       else
       {
         //its flash memory
-        auto is_temp = arg.is_temporary();
-        auto fv = flash_variable{ arg.get_id(), is_temp, reinterpret_cast<void *>( arg.data() ),
-                                  std::make_pair(arg.get_prefetch_data(), arg.get_prefetch_size() )
+        auto is_temp = arg->is_temporary();
+        printf("--------------------- FMEM Normal Parm ----------------------\n");
+	printf("Found Flash memory argument, and temporary = %i : sz = %llu!\n", is_temp, sizes[Idx] );
+        
+        auto fv = flash_variable{ arg->get_id(), is_temp, reinterpret_cast<void *>( arg->data() ),
+                                  std::make_pair(arg->get_prefetch_data(), arg->get_prefetch_size() )
                                 };
      
-        te = te_variable { reinterpret_cast<void *>( arg.data() ), arg.get_type_size(),
+        te = te_variable { reinterpret_cast<void *>( arg->data() ), arg->get_type_size(),
                            sizes[Idx], parm_attr[Idx], fv };
         
       }

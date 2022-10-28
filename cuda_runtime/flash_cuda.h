@@ -240,22 +240,33 @@ struct kernel_library
   std::optional<CUfunction>  
   get_cufunction_for_current_ctx( std::string function_name, std::optional<std::string> location = {} )
   {
+    printf("get_cufunction_for_current_ctx.0\n");
     auto ctx_key = _kernel_comps.get_current_ctx_key();
+
+    printf("get_cufunction_for_current_ctx.1\n");
     
     auto kernel = std::ranges::find_if( kernels, [&] (auto entry)
     {
+      printf("get_cufunction_for_current_ctx.1\n");
       if( location )
+      {
+        printf("get_cufunction_for_current_ctx.2\n");
         return (entry.cuda_context_key  == ctx_key) &&
                (entry.cuda_module_key   == location.value() ) && 
 	       (entry.cuda_function_key == function_name);
+      }
       else
+      {
+        printf("get_cufunction_for_current_ctx.3\n");
         return (entry.cuda_context_key  == ctx_key) &&
 	       (entry.cuda_function_key == function_name);
-
+      }
 
     } );
 
+    printf("get_cufunction_for_current_ctx.4\n");
     auto kfunc = _kernel_comps.get_function( kernel->cuda_function_id );
+    printf("get_cufunction_for_current_ctx.5\n");
 
     return kfunc;
 
@@ -364,6 +375,12 @@ struct index_table
 
   size_t * get_host_ptr(){
     return _hptr;
+  }
+
+  const std::vector<size_t>&
+  get_dims()
+  {
+    return _dims;	  
   }
 
   std::string _id;
@@ -589,7 +606,7 @@ class flash_cuda : public IFlashableRuntime
 
     void _writeback_to_host( ulong, te_variable& );
 
-    void _deallocate_buffer( ulong, te_variable& );
+    void _deallocate_buffer( ulong, DIRECTION,  te_variable& );
 
     kernel_components  _kernel_comps;
 

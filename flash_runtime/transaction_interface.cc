@@ -47,7 +47,7 @@ transaction_interface::add_sa2ta( ulong trans_id, subaction&& sa)
 }
 
 
-options transaction_interface::get_options(ulong sa_id, std::optional<ulong> tid_ovr ) 
+v_options transaction_interface::get_options(ulong sa_id, std::optional<ulong> tid_ovr ) 
 {
   bool ret = false;
   auto tr_id = tid_ovr.value_or( _tid.value() );
